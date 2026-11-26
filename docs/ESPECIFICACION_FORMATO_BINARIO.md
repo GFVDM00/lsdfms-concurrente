@@ -51,39 +51,32 @@ Cada archivo de datos (por ejemplo `data/policies_data.dat`) está compuesto por
 
 ---
 
-## 3. Repositorio de Metadata (`metadata.json` / `MetadataRepository`)
+## 3. Repositorio de Metadata (`data/metadata.properties` / `MetadataRepository`)
 
-El archivo de metadata mantiene la coherencia global del sistema.
+El motor persiste sus metadatos en `data/metadata.properties`, usando el formato
+`java.util.Properties` del JDK. Las propiedades del motor son:
 
-```json
-{
-  "activeDataFile": "data/policies_data.dat",
-  "totalRecords": 1000000,
-  "activeRecords": 950000,
-  "deletedRecords": 50000,
-  "lastOffset": 128456720,
-  "isIndexSynced": true,
-  "lastCompactedAt": 1732578000000,
-  "lastIndexedAt": 1732578000000,
-  "indexes": [
-    {
-      "column": "id",
-      "indexFile": "data/idx_id.idx",
-      "type": "LONG"
-    },
-    {
-      "column": "dni",
-      "indexFile": "data/idx_dni.idx",
-      "type": "STRING_8"
-    },
-    {
-      "column": "departamento",
-      "indexFile": "data/idx_departamento.idx",
-      "type": "STRING_VAR"
-    }
-  ]
-}
+```properties
+activeDataFile=data/policies_data.dat
+totalRecords=1000000
+activeRecords=950000
+deletedRecords=50000
+lastOffset=128456720
+isIndexSynced=true
+lastCompactedAt=1732578000000
+lastIndexedAt=1732578000000
+indexedColumns=id,dni,departamento,tipoSeguro
 ```
+
+`lastOffset` es el **EOF**, es decir, el offset donde comenzaría la próxima
+inserción; no es el offset inicial del último registro. Al abrir el archivo, el
+motor recorre las cabeceras para validar banderas, longitudes y truncamiento, y
+reconstruye offsets válidos y contadores desde los datos. Esto también recupera
+archivos existentes si la metadata falta o quedó desactualizada.
+
+Los archivos `.idx`, sus nombres, tipos y contenido son responsabilidad del
+módulo de indexación. No se guardan como una lista de índices dentro de las
+propiedades del motor; `indexedColumns` solo representa las columnas configuradas.
 
 ---
 
@@ -93,16 +86,20 @@ El archivo de metadata mantiene la coherencia global del sistema.
    - Se posiciona al final del archivo (`raf.seek(raf.length())`).
    - Se guarda el `offset = raf.getFilePointer()`.
    - Se escribe el flag `0x00`, el tamaño del payload y el payload.
-   - Se incrementan `totalRecords`, `activeRecords` en Metadata.
+   - Se incrementan `totalRecords`, `activeRecords` en Metadata y `lastOffset` pasa al nuevo EOF.
    - Se marca `isIndexSynced = false` (el índice queda desactualizado hasta que se ejecute `INDEX()`).
    - Se retorna el `offset`.
 
 2. **Lectura por Offset (`readAt`):**
+   - Solo acepta offsets registrados como inicio real de cabecera; offsets interiores,
+     EOF y negativos se rechazan sin modificar archivo ni metadata.
    - `raf.seek(offset)`.
    - Se lee el byte de borrado. Si es `0x01`, se puede lanzar excepción o retornar objeto con `isDeleted() == true` según el flag solicitado.
    - Se lee el `recordLength` y se deserializan los campos del payload.
 
 3. **Borrado Lógico (`markAsDeleted`):**
+   - Solo acepta offsets de cabecera real; offsets inválidos y borrados repetidos
+     no cambian contadores ni datos.
    - `raf.seek(offset)`.
    - Se sobrescribe únicamente el primer byte con `0x01` (`raf.writeByte(0x01)`).
    - Se incrementa `deletedRecords` y decrementa `activeRecords` en Metadata.

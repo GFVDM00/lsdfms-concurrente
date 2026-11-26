@@ -48,7 +48,7 @@ lsdfms-concurrente/
 ├── docs/                                 # Especificaciones técnicas y guías de trabajo por integrante
 │   ├── ESPECIFICACION_FORMATO_BINARIO.md # Especificación del formato de archivo y offsets
 │   └── GUIA_ALEJANDRO_MOTOR_METADATA.md  # Instrucciones para el primer encargado (Alejandro)
-├── data/                                 # Directorio para archivos .dat, .idx y metadata.json (ignorado en git)
+├── data/                                 # Directorio para archivos .dat, .idx y metadata.properties (ignorado en git)
 ├── src/
 │   └── main/
 │       ├── java/
@@ -99,3 +99,15 @@ javac -d bin -sourcepath src/main/java $(find src/main/java -name "*.java")
 # Ejecutar el sistema
 java -cp bin pe.edu.unmsm.lsdfms.Main
 ```
+
+### Prueba de regresión del motor (sin dependencias externas)
+
+```bash
+javac -d bin -sourcepath src/main/java:src/test/java \
+  $(find src/main/java src/test/java -name "*.java")
+java -cp bin pe.edu.unmsm.lsdfms.storage.RafStorageEngineRegressionTest
+```
+
+La metadata del motor se persiste en `data/metadata.properties`. Los archivos de
+índice (`.idx`) y su construcción pertenecen al módulo de indexación; el motor
+solo conserva en metadata el estado de sincronización y las columnas configuradas.

@@ -32,6 +32,7 @@ build/
 # LSDFMS Data Files (No commitear datasets masivos)
 data/*.dat
 data/*.idx
+data/*.properties
 data/*.tmp
 data/partitions/
 data/temp/
