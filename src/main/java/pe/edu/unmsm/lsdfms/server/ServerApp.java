@@ -3,6 +3,7 @@ package pe.edu.unmsm.lsdfms.server;
 import pe.edu.unmsm.lsdfms.index.IndexEngine;
 import pe.edu.unmsm.lsdfms.index.ParallelIndexEngine;
 import pe.edu.unmsm.lsdfms.model.InsurancePolicy;
+import pe.edu.unmsm.lsdfms.pack.StoragePackAdapter;
 import pe.edu.unmsm.lsdfms.storage.Metadata;
 import pe.edu.unmsm.lsdfms.storage.RafStorageEngine;
 import pe.edu.unmsm.lsdfms.storage.StorageEngine;
@@ -38,6 +39,11 @@ public class ServerApp {
             NativeHttpServer server = new NativeHttpServer(port, engine, 500);
             IndexEngine indexEngine = new ParallelIndexEngine(new File("data").toPath());
             server.setIndexEngine(indexEngine);
+            if (engine instanceof RafStorageEngine) {
+                server.setPackEngine(new StoragePackAdapter());
+            } else {
+                System.out.println("[Brandon] Motor en memoria: PACK() queda deshabilitado en esta sesion.");
+            }
             server.start();
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {

@@ -37,7 +37,10 @@ public final class ParallelPackEngine {
 
     /** Compacts source to output; output may not be the source itself. */
     public PackResult pack(Path source, Path output, int threads) throws IOException, InterruptedException {
-        if (threads != 2 && threads != 4 && threads != 8) throw new IllegalArgumentException("Threads must be 2, 4, or 8");
+        // threads == 1 es la linea base secuencial contra la que se mide el Speedup.
+        if (threads != 1 && threads != 2 && threads != 4 && threads != 8) {
+            throw new IllegalArgumentException("Threads must be 1 (sequential baseline), 2, 4, or 8");
+        }
         Path input = source.toAbsolutePath().normalize();
         Path destination = output.toAbsolutePath().normalize();
         if (!Files.isRegularFile(input) || !Files.isReadable(input)) throw new IOException("Input must be a readable regular file: " + input);

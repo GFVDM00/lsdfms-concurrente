@@ -47,14 +47,15 @@ public final class ParallelIndexEngine implements IndexEngine {
         this(directory, 0, null);
     }
 
-    /** threads = 0 usa un hilo por columna; si no, solo 2, 4 u 8. */
+    /** threads = 0 usa un hilo por columna; 1 es la linea base secuencial; si no, 2, 4 u 8. */
     public ParallelIndexEngine(Path directory, int threads) {
         this(directory, threads, null);
     }
 
     ParallelIndexEngine(Path directory, int threads, IndexScanner.Checkpoint checkpoint) {
-        if (threads != 0 && threads != 2 && threads != 4 && threads != 8) {
-            throw new IllegalArgumentException("Threads must be 0 (one per column), 2, 4, or 8");
+        // threads == 1 es la linea base secuencial contra la que se mide el Speedup.
+        if (threads != 0 && threads != 1 && threads != 2 && threads != 4 && threads != 8) {
+            throw new IllegalArgumentException("Threads must be 0 (one per column), 1 (sequential baseline), 2, 4, or 8");
         }
         this.defaultDirectory = Objects.requireNonNull(directory, "directory").toAbsolutePath().normalize();
         this.threads = threads;

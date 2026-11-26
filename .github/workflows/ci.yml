@@ -31,3 +31,7 @@ jobs:
     - name: Ejecutar Test de Concurrencia de la Cola (Brandon)
       run: |
         java -cp bin pe.edu.unmsm.lsdfms.queue.QueueConcurrencyTest
+
+    - name: Verificar integridad referencial tras PACK e INDEX (Arancivia)
+      run: |
+        java -cp bin pe.edu.unmsm.lsdfms.qa.QaSuite 5000 2

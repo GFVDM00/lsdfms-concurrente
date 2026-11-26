@@ -16,6 +16,7 @@ import pe.edu.unmsm.lsdfms.storage.StorageEngine;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -76,6 +77,7 @@ public class NativeHttpServer {
 
         // Registro de Handlers REST
         this.server.createContext("/api/policies", new PoliciesHandler());
+        this.server.createContext("/api/policies/list", new PolicyListHandler());
         this.server.createContext("/api/search", new SearchHandler());
         this.server.createContext("/api/maintenance", new MaintenanceHandler());
         this.server.createContext("/api/status", new StatusHandler());
@@ -122,6 +124,7 @@ public class NativeHttpServer {
             try {
                 switch (method) {
                     case "POST" -> handleInsert(exchange);
+                    case "PUT" -> handleUpdate(exchange);
                     case "DELETE" -> handleDelete(exchange);
                     case "GET" -> handleGet(exchange);
                     default -> sendJson(exchange, 405, SimpleJson.responseMessage(false, "Metodo no permitido", -1));
@@ -144,6 +147,36 @@ public class NativeHttpServer {
                 sendJson(exchange, 201, SimpleJson.responseMessage(true, result.getMessage(), result.getAffectedOffset()));
             } else {
                 sendJson(exchange, 400, SimpleJson.responseMessage(false, result.getMessage(), -1));
+            }
+        }
+
+        /** El dispatcher marca el offset anterior como borrado y reinserta. */
+        private void handleUpdate(HttpExchange exchange) throws Exception {
+            Map<String, String> query = parseQuery(exchange.getRequestURI());
+            if (!query.containsKey("offset")) {
+                sendJson(exchange, 400, SimpleJson.responseMessage(false, "Parametro 'offset' es requerido", -1));
+                return;
+            }
+
+            long offset;
+            try {
+                offset = Long.parseLong(query.get("offset"));
+            } catch (NumberFormatException e) {
+                sendJson(exchange, 400, SimpleJson.responseMessage(false, "Parametro 'offset' no es numerico", -1));
+                return;
+            }
+
+            String body = readRequestBody(exchange);
+            InsurancePolicy policy = SimpleJson.parsePolicy(body);
+
+            RequestCommand<InsurancePolicy> cmd = RequestCommand.ofUpdate(offset, policy);
+            requestQueue.enqueue(cmd);
+
+            ResponseResult result = cmd.getFutureResponse().get(5, TimeUnit.SECONDS);
+            if (result.isSuccess()) {
+                sendJson(exchange, 200, SimpleJson.responseMessage(true, result.getMessage(), result.getAffectedOffset()));
+            } else {
+                sendJson(exchange, 400, SimpleJson.responseMessage(false, result.getMessage(), offset));
             }
         }
 
@@ -185,6 +218,50 @@ public class NativeHttpServer {
                 sendJson(exchange, 501, SimpleJson.responseMessage(false, "Modulo de Storage aun no implementado por Alejandro", offset));
             } catch (Exception e) {
                 sendJson(exchange, 404, SimpleJson.responseMessage(false, "Error leyendo offset " + offset + ": " + e.getMessage(), offset));
+            }
+        }
+    }
+
+    /** Listado paginado para la tabla del cliente web. Solo lectura. */
+    private class PolicyListHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            addCorsHeaders(exchange);
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, SimpleJson.responseMessage(false, "Solo se permite GET para el listado", -1));
+                return;
+            }
+
+            Map<String, String> query = parseQuery(exchange.getRequestURI());
+            int page = parseInt(query.get("page"), 0);
+            int size = parseInt(query.get("size"), 25);
+            DataFileBrowser.Filter filter = DataFileBrowser.Filter.parse(query.get("estado"));
+
+            try {
+                File dataFile = new File(storageEngine.getMetadata().getActiveDataFile());
+                DataFileBrowser.Page result = DataFileBrowser.read(dataFile, filter, page, size);
+
+                StringBuilder json = new StringBuilder();
+                json.append("{\"page\":").append(Math.max(0, page))
+                    .append(",\"size\":").append(size)
+                    .append(",\"returned\":").append(result.getPolicies().size())
+                    .append(",\"matched\":").append(result.getMatched())
+                    .append(",\"scanned\":").append(result.getScanned())
+                    .append(",\"hasMore\":").append(result.hasMore())
+                    .append(",\"records\":[");
+                for (int i = 0; i < result.getPolicies().size(); i++) {
+                    if (i > 0) json.append(',');
+                    json.append(SimpleJson.policyToJson(result.getPolicies().get(i), result.getOffsets().get(i)));
+                }
+                json.append("]}");
+                sendJson(exchange, 200, json.toString());
+
+            } catch (Exception e) {
+                sendJson(exchange, 500, SimpleJson.responseMessage(false, "Error listando registros: " + e.getMessage(), -1));
             }
         }
     }
@@ -297,8 +374,10 @@ public class NativeHttpServer {
                 path = "/index.html";
             }
 
-            File file = new File("src/main/resources/public" + path);
-            if (!file.exists() || file.isDirectory()) {
+            File root = new File("src/main/resources/public").getCanonicalFile();
+            File file = new File(root, path).getCanonicalFile();
+            // Un ".." en la URL no debe escapar del directorio publico.
+            if (!file.toPath().startsWith(root.toPath()) || !file.exists() || file.isDirectory()) {
                 String notFound = "<h1>404 Not Found</h1><p>Cliente web en desarrollo por Cicilis.</p>";
                 byte[] bytes = notFound.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
@@ -354,18 +433,27 @@ public class NativeHttpServer {
         }
     }
 
+    private static int parseInt(String raw, int fallback) {
+        if (raw == null || raw.isBlank()) return fallback;
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
     private static Map<String, String> parseQuery(URI uri) {
         Map<String, String> map = new HashMap<>();
-        String query = uri.getQuery();
+        // Separar sobre la forma codificada evita que un "&" o "=" del valor rompa el parseo.
+        String query = uri.getRawQuery();
         if (query == null) return map;
         String[] pairs = query.split("&");
         for (String pair : pairs) {
-            String[] kv = pair.split("=");
-            if (kv.length == 2) {
-                map.put(kv[0], kv[1]);
-            } else if (kv.length == 1) {
-                map.put(kv[0], "");
-            }
+            if (pair.isEmpty()) continue;
+            String[] kv = pair.split("=", 2);
+            String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
+            String value = kv.length == 2 ? URLDecoder.decode(kv[1], StandardCharsets.UTF_8) : "";
+            map.put(key, value);
         }
         return map;
     }
