@@ -32,7 +32,7 @@ public class RafStorageEngine implements StorageEngine {
     private final File dataFile;
     private final File metadataFile;
     private final MetadataRepository metadataRepository;
-    private final RandomAccessFile raf;
+    private RandomAccessFile raf;
     private final Set<Long> recordOffsets = new HashSet<>();
     private final ThreadLocal<Metadata> metadataView = new ThreadLocal<>();
     private Metadata metadata;
@@ -174,6 +174,42 @@ public class RafStorageEngine implements StorageEngine {
             metadataView.remove();
             metadataRepository.save(metadata);
         }
+    }
+
+    /**
+     * El descriptor se cierra antes de mover porque en Windows un handle abierto
+     * impide reemplazar el destino. Si el movimiento falla, se reabre el original.
+     */
+    @Override
+    public synchronized void replaceDataFile(java.nio.file.Path compactedFile) throws IOException {
+        Objects.requireNonNull(compactedFile, "compactedFile no puede ser null");
+        java.nio.file.Path source = compactedFile.toAbsolutePath().normalize();
+        java.nio.file.Path target = dataFile.getAbsoluteFile().toPath().normalize();
+
+        if (source.equals(target)) {
+            throw new IOException("El archivo compactado no puede ser el archivo activo");
+        }
+        if (!java.nio.file.Files.isRegularFile(source)) {
+            throw new IOException("Archivo compactado no encontrado: " + source);
+        }
+
+        raf.close();
+        try {
+            java.nio.file.Files.move(source, target,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException | RuntimeException failure) {
+            raf = new RandomAccessFile(dataFile, "rw");
+            throw failure;
+        }
+
+        raf = new RandomAccessFile(dataFile, "rw");
+        recordOffsets.clear();
+        rebuildRecordBoundaries(dataFile.getPath());
+
+        metadata.setLastCompactedAt(System.currentTimeMillis());
+        metadata.setIndexSynced(false);
+        metadataRepository.save(metadata);
     }
 
     @Override

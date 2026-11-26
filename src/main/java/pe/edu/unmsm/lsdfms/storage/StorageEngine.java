@@ -47,4 +47,15 @@ public interface StorageEngine extends AutoCloseable {
      * Sincroniza y guarda el estado actual de la metadata en disco.
      */
     void saveMetadata() throws IOException;
+
+    /**
+     * Publica el archivo compactado por PACK() como nuevo archivo de datos activo,
+     * reconstruyendo offsets y contadores y dejando los índices desactualizados.
+     *
+     * Solo debe invocarse desde el hilo que serializa las mutaciones.
+     */
+    default void replaceDataFile(java.nio.file.Path compactedFile) throws IOException {
+        throw new UnsupportedOperationException(
+                "Este motor de almacenamiento no soporta la publicación de archivos compactados");
+    }
 }

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LSDFMS — Pólizas de Seguros</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">LSDFMS</span>
+    <span class="subtitle">Gestión de Pólizas de Seguros · Cliente Web</span>
+  </div>
+  <div class="indicators">
+    <span id="indexState" class="badge badge-unknown" title="Estado del índice">Índice: —</span>
+    <span id="serverState" class="badge badge-unknown" title="Conexión con el servidor Java">Servidor: —</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ====== Panel de estado (RF-07) ====== -->
+  <section class="panel" id="panelEstado">
+    <h2>Estado del repositorio</h2>
+    <div class="metrics">
+      <div class="metric"><span class="metric-value" id="mTotal">—</span><span class="metric-label">Registros totales</span></div>
+      <div class="metric"><span class="metric-value" id="mActivos">—</span><span class="metric-label">Activos</span></div>
+      <div class="metric"><span class="metric-value" id="mEliminados">—</span><span class="metric-label">Marcados para borrado</span></div>
+      <div class="metric"><span class="metric-value" id="mCola">—</span><span class="metric-label">Peticiones en cola</span></div>
+      <div class="metric"><span class="metric-value" id="mOffset">—</span><span class="metric-label">EOF (bytes)</span></div>
+    </div>
+    <div class="maintenance">
+      <p id="maintenanceHint" class="hint">
+        Al insertar, modificar o eliminar registros el índice queda <strong>Desactualizado</strong>.
+        Ejecute el mantenimiento en el servidor para correr <code>PACK()</code> e <code>INDEX()</code> en paralelo.
+      </p>
+      <button id="btnMantenimiento" class="btn btn-warning">Ejecutar mantenimiento (PACK + INDEX)</button>
+      <span class="timestamps">
+        Última compactación: <span id="mCompactado">—</span> ·
+        Última indexación: <span id="mIndexado">—</span>
+      </span>
+    </div>
+  </section>
+
+  <div class="columns">
+
+    <!-- ====== Alta / Edición (RF-03) ====== -->
+    <section class="panel" id="panelFormulario">
+      <h2 id="formTitle">Registrar nueva póliza</h2>
+      <form id="policyForm" autocomplete="off">
+        <input type="hidden" id="editOffset" value="">
+        <div class="field">
+          <label for="id">ID de póliza</label>
+          <input type="number" id="id" name="id" min="1" step="1" required>
+        </div>
+        <div class="field">
+          <label for="dni">DNI del asegurado</label>
+          <input type="text" id="dni" name="dni" maxlength="8" pattern="\d{8}" placeholder="8 dígitos" required>
+        </div>
+        <div class="field">
+          <label for="titular">Titular</label>
+          <input type="text" id="titular" name="titular" maxlength="120" required>
+        </div>
+        <div class="field">
+          <label for="tipoSeguro">Tipo de seguro</label>
+          <select id="tipoSeguro" name="tipoSeguro" required>
+            <option value="Salud Integral">Salud Integral</option>
+            <option value="Vehicular Todo Riesgo">Vehicular Todo Riesgo</option>
+            <option value="Vida Ley">Vida Ley</option>
+            <option value="SOAT">SOAT</option>
+            <option value="Hogar Multiriesgo">Hogar Multiriesgo</option>
+            <option value="Accidentes Personales">Accidentes Personales</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="departamento">Departamento</label>
+          <select id="departamento" name="departamento" required></select>
+        </div>
+        <div class="field">
+          <label for="prima">Prima (S/.)</label>
+          <input type="number" id="prima" name="prima" min="0" step="0.01" required>
+        </div>
+        <div class="field">
+          <label for="fechaEmision">Fecha de emisión</label>
+          <input type="date" id="fechaEmision" name="fechaEmision" required>
+        </div>
+        <div class="form-actions">
+          <button type="submit" id="btnGuardar" class="btn btn-primary">Encolar inserción</button>
+          <button type="button" id="btnCancelar" class="btn btn-ghost hidden">Cancelar edición</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ====== Búsqueda O(log n) (RF-02) ====== -->
+    <section class="panel" id="panelBusqueda">
+      <h2>Búsqueda por índice <span class="tag">O(log n)</span></h2>
+      <form id="searchForm" autocomplete="off">
+        <div class="field">
+          <label for="searchColumn">Columna indexada</label>
+          <select id="searchColumn"></select>
+        </div>
+        <div class="field">
+          <label for="searchKey">Valor a buscar</label>
+          <input type="text" id="searchKey" placeholder="Ej. 40123456" required>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Buscar</button>
+          <button type="button" id="btnLimpiarBusqueda" class="btn btn-ghost">Limpiar</button>
+        </div>
+      </form>
+      <div id="searchResult" class="search-result"></div>
+      <p class="hint">
+        La búsqueda consulta el archivo de índice <code>.idx</code> por búsqueda binaria.
+        Si el índice está <strong>Desactualizado</strong>, el resultado puede no reflejar
+        las últimas alteraciones hasta ejecutar el mantenimiento.
+      </p>
+    </section>
+
+  </div>
+
+  <!-- ====== Tabla de registros ====== -->
+  <section class="panel" id="panelTabla">
+    <div class="panel-head">
+      <h2>Registros del archivo de datos</h2>
+      <div class="table-controls">
+        <label for="filtroEstado" class="sr-only">Filtro de estado</label>
+        <select id="filtroEstado">
+          <option value="activos">Solo activos</option>
+          <option value="eliminados">Solo marcados para borrado</option>
+          <option value="todos">Todos</option>
+        </select>
+        <label for="tamPagina" class="sr-only">Tamaño de página</label>
+        <select id="tamPagina">
+          <option value="10">10 por página</option>
+          <option value="25" selected>25 por página</option>
+          <option value="50">50 por página</option>
+          <option value="100">100 por página</option>
+        </select>
+        <button id="btnRecargar" class="btn btn-ghost">Recargar</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table id="policyTable">
+        <thead>
+          <tr>
+            <th>Offset</th>
+            <th>ID</th>
+            <th>DNI</th>
+            <th>Titular</th>
+            <th>Tipo de seguro</th>
+            <th>Departamento</th>
+            <th class="num">Prima</th>
+            <th>Emisión</th>
+            <th>Estado</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="policyTableBody">
+          <tr><td colspan="10" class="empty">Cargando registros…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pager">
+      <button id="btnPrev" class="btn btn-ghost">◀ Anterior</button>
+      <span id="pageInfo">Página 1</span>
+      <button id="btnNext" class="btn btn-ghost">Siguiente ▶</button>
+    </div>
+  </section>
+
+  <!-- ====== Bitácora ====== -->
+  <section class="panel" id="panelLog">
+    <div class="panel-head">
+      <h2>Bitácora de operaciones</h2>
+      <button id="btnLimpiarLog" class="btn btn-ghost">Limpiar</button>
+    </div>
+    <ul id="activityLog" class="log"></ul>
+  </section>
+
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<footer>
+  LSDFMS — Programación Concurrente y Paralela · Módulo 5: Cliente Web y Modelado del Caso Real (Cicilis)
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

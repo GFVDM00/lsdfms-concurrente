@@ -30,9 +30,5 @@ bin/
 build/
 
 # LSDFMS Data Files (No commitear datasets masivos)
-data/*.dat
-data/*.idx
-data/*.properties
-data/*.tmp
-data/partitions/
-data/temp/
+# Incluye los subdirectorios de trabajo del benchmark y de la suite de QA.
+data/

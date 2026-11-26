@@ -48,7 +48,9 @@ Para evitar bloqueos y colisiones de código entre los 6 integrantes:
 lsdfms-concurrente/
 ├── docs/                                 # Especificaciones técnicas y guías de trabajo por integrante
 │   ├── ESPECIFICACION_FORMATO_BINARIO.md # Especificación del formato de archivo y offsets
-│   └── GUIA_ALEJANDRO_MOTOR_METADATA.md  # Instrucciones para el primer encargado (Alejandro)
+│   ├── GUIA_ALEJANDRO_MOTOR_METADATA.md  # Instrucciones para el primer encargado (Alejandro)
+│   ├── GUIA_CICILIS_CLIENTE_WEB.md       # Cliente web, endpoints consumidos y caso de negocio
+│   └── GUIA_ARANCIVIA_GENERADOR_BENCHMARK_QA.md # Generador masivo, Speedup y QA de integridad
 ├── data/                                 # Directorio para archivos .dat, .idx y metadata.properties (ignorado en git)
 ├── src/
 │   └── main/
@@ -101,6 +103,21 @@ javac -d bin -sourcepath src/main/java $(find src/main/java -name "*.java")
 # Ejecutar el sistema
 java -cp bin pe.edu.unmsm.lsdfms.Main
 ```
+
+### Cliente web
+
+Con el servidor levantado, la interfaz queda disponible en `http://localhost:8080/`
+(el servidor la sirve desde `src/main/resources/public`, por lo que debe arrancarse
+desde la raíz del repositorio):
+
+```bash
+java -cp bin pe.edu.unmsm.lsdfms.server.ServerApp 8080
+```
+
+Permite registrar, modificar y marcar pólizas para borrado lógico, buscar por campo
+indexado en $O(\log n)$ y disparar el mantenimiento `PACK()` + `INDEX()`, mostrando
+en vivo cómo el índice pasa de *Sincronizado* a *Desactualizado* y vuelve.
+Detalles en [`docs/GUIA_CICILIS_CLIENTE_WEB.md`](docs/GUIA_CICILIS_CLIENTE_WEB.md).
 
 ### Prueba de regresión del motor (sin dependencias externas)
 
