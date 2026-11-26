@@ -22,6 +22,25 @@ Diseñar e implementar desde cero en **Java estándar (JDK)** un Sistema de Gest
 
 ---
 
+## 🌿 Política de Ramas y Flujo Git (Trabajo Concurrente)
+
+Para evitar bloqueos y colisiones de código entre los 6 integrantes:
+1. **Ramas independientes:** Cada integrante trabaja exclusivamente en su propia rama (`feature/modulo-X-...`).
+2. **Autoridad de Merge a `main`:** **Alejandro** es el Líder de Integración General y el **único responsable de autorizar y hacer merge hacia la rama `main`** mediante Pull Requests.
+3. **Detalles completos:** Ver [`docs/POLITICA_GIT_Y_COLABORACION.md`](docs/POLITICA_GIT_Y_COLABORACION.md).
+
+| Rama | Responsable | Módulo |
+|---|---|---|
+| `main` | **Alejandro** (Integrador) | Rama protegida y estable |
+| `feature/modulo-1-storage-metadata` | Alejandro | Motor LSDFMS y Metadata |
+| `feature/modulo-2-server-queue` | Brandon | Servidor HTTP y Cola Sincronizada |
+| `feature/modulo-3-pack-parallel` | Anderson | Compactación PACK() Paralela |
+| `feature/modulo-4-index-parallel` | Jerson | Indexación INDEX() Paralela |
+| `feature/modulo-5-web-client` | Cicilis | Cliente Web Minimalista |
+| `feature/modulo-6-generator-qa` | Arancivia | Generador Masivo y QA |
+
+---
+
 ## 🏛️ Estructura del Repositorio
 
 ```text
