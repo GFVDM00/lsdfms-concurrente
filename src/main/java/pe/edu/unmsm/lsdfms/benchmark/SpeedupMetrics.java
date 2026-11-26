@@ -1,63 +1,61 @@
 package pe.edu.unmsm.lsdfms.benchmark;
 
-/**
- * Metricas de rendimiento paralelo: S(p) = T(1)/T(p) y E(p) = S(p)/p.
- *
- * T(1) es el mismo algoritmo con un unico hilo de trabajo, no una implementacion
- * distinta, de modo que la comparacion aisla el efecto del paralelismo.
- */
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+/** Calculo de Speedup/eficiencia y escritura del CSV de resultados. */
 public final class SpeedupMetrics {
-
-    public static final class Measurement {
-        private final String operation;
-        private final int threads;
-        private final long elapsedMillis;
-        private final long recordsProcessed;
-
-        public Measurement(String operation, int threads, long elapsedMillis, long recordsProcessed) {
-            if (threads < 1) throw new IllegalArgumentException("threads debe ser >= 1");
-            if (elapsedMillis < 0) throw new IllegalArgumentException("elapsedMillis no puede ser negativo");
-            this.operation = operation;
-            this.threads = threads;
-            this.elapsedMillis = elapsedMillis;
-            this.recordsProcessed = recordsProcessed;
-        }
-
-        public String getOperation() { return operation; }
-        public int getThreads() { return threads; }
-        public long getElapsedMillis() { return elapsedMillis; }
-        public long getRecordsProcessed() { return recordsProcessed; }
-
-        public double throughput() {
-            return elapsedMillis <= 0 ? Double.NaN : recordsProcessed * 1000.0 / elapsedMillis;
-        }
-    }
 
     private SpeedupMetrics() {}
 
-    public static double speedup(long baselineMillis, long parallelMillis) {
-        if (baselineMillis <= 0 || parallelMillis <= 0) return Double.NaN;
-        return (double) baselineMillis / parallelMillis;
+    /**
+     * Aplica T1 como linea base para cada operacion. Si no se ejecuto T1,
+     * speedup y eficiencia quedan en cero y el reporte lo indica.
+     */
+    public static void apply(List<BenchmarkResult> results) {
+        for (BenchmarkResult result : results) {
+            BenchmarkResult baseline = results.stream()
+                    .filter(candidate -> candidate.getOperation().equals(result.getOperation()))
+                    .filter(candidate -> candidate.getThreads() == 1)
+                    .findFirst()
+                    .orElse(null);
+            if (baseline == null || baseline.getDurationMs() <= 0) {
+                result.setMetrics(0.0, 0.0);
+            } else if (result.getThreads() == 1) {
+                result.setMetrics(1.0, 1.0);
+            } else {
+                double speedup = baseline.getDurationMs() / result.getDurationMs();
+                result.setMetrics(speedup, speedup / result.getThreads());
+            }
+        }
     }
 
-    /** En tanto por uno. */
-    public static double efficiency(long baselineMillis, long parallelMillis, int threads) {
-        double s = speedup(baselineMillis, parallelMillis);
-        if (Double.isNaN(s) || threads < 1) return Double.NaN;
-        return s / threads;
+    public static void writeCsv(Path output, List<BenchmarkResult> results) throws IOException {
+        Path parent = output.toAbsolutePath().normalize().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        StringBuilder csv = new StringBuilder();
+        csv.append("operacion,registros,activos,eliminados,hilos,tiempo_ms,speedup,eficiencia\n");
+        for (BenchmarkResult result : results) {
+            csv.append(result.toCsvRow()).append('\n');
+        }
+        Files.writeString(output, csv.toString(), StandardCharsets.UTF_8);
     }
 
-    /** Fraccion paralelizable segun Amdahl: f = (1 - 1/S) / (1 - 1/p). */
-    public static double amdahlParallelFraction(double observedSpeedup, int threads) {
-        if (Double.isNaN(observedSpeedup) || threads <= 1 || observedSpeedup <= 0) return Double.NaN;
-        return (1.0 - 1.0 / observedSpeedup) / (1.0 - 1.0 / threads);
-    }
-
-    public static String formatDouble(double value) {
-        return Double.isNaN(value) ? "n/d" : String.format("%.2f", value);
-    }
-
-    public static String formatPercent(double ratio) {
-        return Double.isNaN(ratio) ? "n/d" : String.format("%.1f%%", ratio * 100);
+    public static void printSummary(List<BenchmarkResult> results) {
+        System.out.printf("%-6s %7s %12s %10s %12s%n",
+                "OP", "HILOS", "TIEMPO(ms)", "SPEEDUP", "EFICIENCIA");
+        for (BenchmarkResult result : results) {
+            System.out.printf("%-6s %7d %12.2f %10s %12s%n",
+                    result.getOperation(),
+                    result.getThreads(),
+                    result.getDurationMs(),
+                    result.getSpeedup() > 0 ? String.format("%.3f", result.getSpeedup()) : "n/a",
+                    result.getEfficiency() > 0 ? String.format("%.3f", result.getEfficiency()) : "n/a");
+        }
     }
 }

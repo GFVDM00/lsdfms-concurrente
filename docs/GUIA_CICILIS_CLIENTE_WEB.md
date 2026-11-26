@@ -124,14 +124,37 @@ El servidor ya responde con cabeceras CORS abiertas en todos los endpoints.
 
 ---
 
-## 6. Notas de integración
+## 6. Integración de `PACK()` en el mantenimiento
 
-`PACK()` ya se ejecuta realmente en el ciclo de mantenimiento mediante
-`StoragePackAdapter` (ver [`GUIA_ARANCIVIA_GENERADOR_BENCHMARK_QA.md`](GUIA_ARANCIVIA_GENERADOR_BENCHMARK_QA.md)),
-por lo que tras el mantenimiento **los offsets cambian**: el cliente recarga la
-tabla desde la primera página y limpia el resaltado, en lugar de reutilizar los
-offsets anteriores.
+`POST /api/maintenance` ejecuta `PACK()` e `INDEX()` reales. `ParallelPackEngine`
+(Módulo 3) no implementa la interfaz `PackEngine` que espera `QueueDispatcher` y,
+por diseño, nunca reemplaza su archivo de origen: escribe el compactado aparte.
+El paso de publicación que faltaba lo añade `pack/StoragePackAdapter`:
 
-- **Columnas indexables en la UI.** `COLUMNAS_INDEXADAS` en `app.js` replica el
-  valor por defecto de `Metadata.indexedColumns`. Si el equipo decide exponer esa
-  lista en `GET /api/status`, el selector de búsqueda debería poblarse desde ahí.
+1. Compacta el archivo activo hacia un hermano `.packed`.
+2. `StorageEngine.replaceDataFile(...)` cierra el descriptor, reemplaza el archivo
+   de forma atómica, lo reabre y reconstruye offsets y contadores desde el
+   contenido nuevo, dejando los índices marcados como desactualizados.
+3. Si algo falla, el archivo activo queda intacto y el temporal se descarta.
+
+El descriptor se cierra antes de mover porque en Windows un handle abierto impide
+reemplazar el destino. Solo lo invoca el hilo del `QueueDispatcher`, único escritor
+del archivo, por lo que durante la compactación no hay mutaciones concurrentes
+(RNF-02). Verificación extremo a extremo desde la API, con 5000 registros y 40 %
+marcados:
+
+```text
+antes:   totalRecords=5000  activos=3003  marcados=1997  471 426 bytes
+después: totalRecords=3003  activos=3003  marcados=0     283 253 bytes  (−40 %)
+```
+
+Como **los offsets cambian tras compactar**, el cliente recarga la tabla desde la
+primera página y limpia el resaltado en lugar de reutilizar los offsets anteriores.
+
+---
+
+## 7. Pendiente
+
+**Columnas indexables en la UI.** `COLUMNAS_INDEXADAS` en `app.js` replica el valor
+por defecto de `Metadata.indexedColumns`. Si el equipo decide exponer esa lista en
+`GET /api/status`, el selector de búsqueda debería poblarse desde ahí.

@@ -1,153 +1,243 @@
-# Módulo 6 — Generador de Datos Masivos, Benchmarking y QA (Arancivia)
+# Módulo 6 — Generador masivo, Benchmarking y QA
 
-Cubre **RNF-03** (escalabilidad y métricas de rendimiento) y el aseguramiento de
-calidad del repositorio: generación de datasets masivos, medición de *Speedup* y
-eficiencia de `PACK()` e `INDEX()`, y verificación de integridad referencial.
+**Responsable:** Arancivia
+
+**Requerimientos cubiertos:** RNF-03 (escalabilidad y métricas), apoyo a RF-01/RF-05/RF-06 y QA de integridad.
+
+Este módulo es independiente del cliente web y del servidor HTTP. Se ejecuta
+por consola contra las clases Java del motor de almacenamiento, PACK e INDEX.
 
 ---
 
-## 1. Generador de datasets masivos
+## 1. Componentes
 
-`pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator`
+```text
+src/main/java/pe/edu/unmsm/lsdfms/
+├── generator/
+│   ├── DatasetSpec.java
+│   ├── PolicyFactory.java
+│   ├── MassiveDataGenerator.java
+│   ├── GenerationResult.java
+│   └── DatasetVerifier.java
+├── benchmark/
+│   ├── BenchmarkConfig.java
+│   ├── BenchmarkRunner.java
+│   ├── BenchmarkResult.java
+│   ├── SpeedupMetrics.java
+│   ├── BenchmarkStorage.java
+│   ├── SequentialPackEngine.java
+│   └── SequentialPackResult.java
+└── qa/
+    ├── IntegrityChecker.java
+    ├── IntegrityReport.java
+    └── StressTest.java
+```
+
+### Generador
+
+- Escribe directamente el formato binario documentado:
+  `flag (1 byte) | recordLength (4 bytes big-endian) | payload`.
+- Respeta el orden de campos de `RafStorageEngine`:
+  `id`, `dni`, `titular`, `tipoSeguro`, `departamento`, `prima`, `fechaEmision`.
+- Usa `SplittableRandom` con semilla: el mismo seed produce el mismo `.dat`.
+- Genera DNI únicos de 8 dígitos y nombres/apellidos de longitud variable.
+- Escribe Metadata una sola vez al final (no persiste metadata por registro).
+- Permite marcar un porcentaje de registros como eliminados lógicamente para
+  alimentar los benchmarks de PACK.
+
+### Benchmarking
+
+- **PACK:** T1 con `SequentialPackEngine` (implementación secuencial de
+  referencia) y T2/T4/T8 con `ParallelPackEngine` de producción.
+- **INDEX:** T1 ejecuta una columna a la vez con `ParallelIndexEngine`
+  (`threads=0` y una sola columna = un hilo). T2/T4/T8 ejecutan todas las
+  columnas en paralelo con el motor de producción.
+- Cada corrida usa una copia limpia del dataset en un directorio temporal; el
+  tiempo de copia no se mide.
+- Se descarta el warmup y se usa la mediana de las repeticiones.
+- Salida CSV con tiempo, Speedup y eficiencia.
+
+> **Limitación de INDEX:** el motor de Jerson no expone `threads=1`. El baseline
+> T1 usa el mismo motor con una columna a la vez; es una comparación de tareas
+> equivalente (4 columnas secuenciales vs. 4 columnas concurrentes), no una
+> opción oficial `threads=1`.
+
+### QA
+
+- `IntegrityChecker` recorre todo el archivo y valida:
+  - cabeceras, longitudes, flags y offsets;
+  - deserialización de cada payload;
+  - conteos y `lastOffset` contra Metadata;
+  - unicidad de ids y offsets;
+  - búsquedas por id y por columnas de texto en los índices.
+- Para datasets grandes, las comprobaciones de índice se muestrean de forma
+  sistemática (10,000 ids y 2,000 valores por columna de texto indexada);
+  los conteos y el recorrido del archivo son completos.
+- `StressTest` ejecuta ciclos:
+  `borrado lógico + inserción -> INDEX -> verificación -> PACK -> INDEX -> verificación`.
+
+---
+
+## 2. Compilación
+
+```powershell
+Get-ChildItem -Recurse -Filter *.java src/main/java |
+  ForEach-Object { $_.FullName } | Set-Content sources-main.txt
+javac -encoding UTF-8 -d bin -sourcepath src/main/java @sources-main.txt
+
+Get-ChildItem -Recurse -Filter *.java src/test/java |
+  ForEach-Object { $_.FullName } | Set-Content sources-test.txt
+javac -encoding UTF-8 -d bin -cp bin -sourcepath src/test/java @sources-test.txt
+```
+
+En Linux/macOS:
 
 ```bash
-# java -cp bin ...MassiveDataGenerator [registros] [archivo] [ratioBorrados] [semilla]
-java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator 1000000 data/policies_data.dat 0.30
+javac -encoding UTF-8 -d bin -sourcepath src/main/java \
+  $(find src/main/java -name "*.java")
+javac -encoding UTF-8 -d bin -cp bin -sourcepath src/test/java \
+  $(find src/test/java -name "*.java")
 ```
-
-Escribe directamente el formato binario de RF-01 (`flag 1B + length 4B + payload`)
-en lugar de insertar registro a registro: con 2,000,000 de filas, el camino de
-inserción con persistencia de metadata por registro sería inviable. La metadata no
-se escribe aquí — `RafStorageEngine` la reconstruye al abrir el archivo, que es la
-fuente de verdad.
-
-- Longitud variable real: titulares de 2 apellidos, tipos de seguro y departamentos
-  de distinta longitud en UTF-8. Media observada: **~94 bytes/registro**.
-- `ratioBorrados` marca un porcentaje con la bandera `0x01` para que `PACK()` tenga
-  trabajo real que descartar.
-- `semilla` fija hace los datasets reproducibles entre corridas.
-
-| Lote | Tamaño aproximado | Tiempo de generación |
-|---|---|---|
-| 100,000 | ~9 MB | ~0,3 s |
-| 500,000 | ~45 MB | ~1,5 s |
-| 2,000,000 | ~180 MB | ~6 s |
 
 ---
 
-## 2. Línea base secuencial
+## 3. Generador
 
-Para medir Speedup hace falta `T(1)`. Ambos motores paralelos aceptan ahora
-`threads = 1`, que ejecuta **el mismo algoritmo con un único hilo de trabajo**:
+### Uso
 
-- `ParallelPackEngine` con 1 hilo genera una sola partición que cubre el archivo
-  completo y la procesa con un único worker.
-- `ParallelIndexEngine` con 1 hilo construye los índices de las columnas uno tras
-  otro en serie.
+```powershell
+java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator `
+  --records 100000 `
+  --output data/dataset_100k.dat `
+  --metadata data/dataset_100k.properties `
+  --seed 42 `
+  --deleted-percent 10
+```
 
-Comparar contra el mismo código con `P=1` aísla el efecto del paralelismo; una
-implementación secuencial distinta introduciría diferencias ajenas a él.
+Opciones:
+
+| Opción | Descripción |
+|---|---|
+| `--records N` | Cantidad de registros |
+| `--output PATH` | Archivo `.dat` de salida |
+| `--metadata PATH` | Archivo `.properties` de metadata |
+| `--seed N` | Semilla reproducible |
+| `--deleted-percent N` | Porcentaje de registros con flag `0x01` |
+
+### Verificación
+
+```powershell
+java -cp bin pe.edu.unmsm.lsdfms.generator.DatasetVerifier `
+  --data data/dataset_100k.dat `
+  --metadata data/dataset_100k.properties
+```
+
+### Tamaños de referencia
+
+| Dataset | Registros | Activos | Eliminados | Bytes |
+|---|---:|---:|---:|---:|
+| 100k | 100,000 | 89,941 | 10,059 | 10,501,143 |
+| 500k | 500,000 | 449,722 | 50,278 | 52,498,035 |
+| 2M | 2,000,000 | 1,799,070 | 200,930 | 209,979,582 |
+
+> Estos datasets se generan localmente y están cubiertos por `.gitignore`
+> (`data/*.dat`, `data/*.properties`). No se versionan archivos masivos.
 
 ---
 
-## 3. Benchmarking
+## 4. Benchmarking
 
-`pe.edu.unmsm.lsdfms.benchmark.BenchmarkRunner`
+### Uso
 
-```bash
-# java -cp bin ...BenchmarkRunner [registros] [repeticiones] [csvSalida]
-java -Xmx2g -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkRunner 1000000 3 docs/benchmark.csv
+```powershell
+java -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkRunner `
+  --data data/dataset_100k.dat `
+  --metadata data/dataset_100k.properties `
+  --output results/benchmark_100k.csv `
+  --operations pack,index `
+  --threads 1,2,4,8 `
+  --repetitions 3 `
+  --warmup 1
 ```
 
-Genera el dataset, hace una corrida de calentamiento (descartada, para no medir la
-compilación JIT), ejecuta cada configuración `repeticiones` veces y reporta el mejor
-tiempo. Verifica además que todas las configuraciones conserven exactamente el mismo
-número de registros: una ganancia de velocidad que pierda datos no es una ganancia.
+Opciones:
 
-### Resultados de referencia (150,000 registros · 30% marcados · 12 núcleos)
+| Opción | Descripción |
+|---|---|
+| `--operations` | `pack`, `index` o ambas |
+| `--threads` | `1,2,4,8` |
+| `--repetitions` | Repeticiones medidas |
+| `--warmup` | Corridas descartadas antes de medir |
+| `--output` | CSV de resultados |
 
-**`PACK()` — paralelismo a nivel de datos**
+### Metodología
 
-| Hilos | Tiempo | Speedup | Eficiencia |
-|---|---|---|---|
-| 1 (base) | 6475 ms | — | — |
-| 2 | 5080 ms | 1,27× | 63,7% |
-| 4 | 4230 ms | 1,53× | 38,3% |
-| 8 | 3858 ms | 1,68× | 21,0% |
+- Ejecutar sobre disco local, no sobre una carpeta sincronizada por OneDrive.
+- Usar la misma JVM, los mismos flags y el mismo dataset para todos los hilos.
+- T1 = referencia secuencial.
+- Speedup = `T1 / Tp`; eficiencia = `Speedup / p`.
+- Para INDEX, T1 suma el tiempo de indexar cada columna por separado.
+- Para PACK, T1 usa `SequentialPackEngine`; T2/T4/T8 usan `ParallelPackEngine`.
+- El warmup y las copias del dataset quedan fuera del tiempo medido.
 
-**`INDEX()` — paralelismo a nivel de tareas**
-
-| Hilos | Tiempo | Speedup | Eficiencia |
-|---|---|---|---|
-| 1 (base) | 12212 ms | — | — |
-| 2 | 7456 ms | 1,64× | 81,9% |
-| 4 | 4117 ms | 2,97× | 74,2% |
-| 8 | 4075 ms | 3,00× | 37,5% |
-
-### Lectura de los resultados
-
-- **`INDEX()` escala mejor que `PACK()`**: construir y ordenar el índice de cada
-  columna es trabajo de CPU independiente, mientras que `PACK()` está dominado por
-  E/S secuencial (copia del snapshot y fusión final de bloques), que no se
-  paraleliza.
-- **`INDEX()` se satura en 4 hilos** (2,97× → 3,00×): solo hay **4 columnas
-  indexadas**, de modo que con 8 hilos cuatro quedan ociosos. El paralelismo a nivel
-  de tareas está limitado por el número de tareas disponibles, no por los núcleos.
-  Para aprovechar 8 hilos habría que indexar 8 columnas o partir el ordenamiento de
-  cada columna.
-- La **eficiencia cae al crecer P** en ambos casos, como predice la ley de Amdahl:
-  la fracción secuencial (snapshot, fusión, publicación atómica) fija el techo.
+Los resultados completos están en [`RESULTADOS_BENCHMARK.md`](RESULTADOS_BENCHMARK.md).
 
 ---
 
-## 4. QA — integridad referencial
+## 5. QA y estrés
 
-`pe.edu.unmsm.lsdfms.qa.QaSuite` y `pe.edu.unmsm.lsdfms.qa.IntegrityVerifier`
+### Prueba automatizada rápida
 
-```bash
-# java -cp bin ...QaSuite [registros] [ciclos]
-java -cp bin pe.edu.unmsm.lsdfms.qa.QaSuite 20000 3
+```powershell
+java -ea -cp bin pe.edu.unmsm.lsdfms.qa.IntegrityCheckerTest
 ```
 
-Cada ciclo marca ~20% de los registros activos para borrado lógico, ejecuta `PACK()`
-con 4 hilos, reconstruye los índices y verifica:
+### Prueba de estrés configurable
 
-1. El archivo se recorre de cabecera en cabecera sin registros truncados ni banderas
-   inválidas.
-2. Los contadores de `Metadata` (`totalRecords`, `activeRecords`, `deletedRecords`,
-   `lastOffset`) coinciden con el contenido real del archivo.
-3. Una muestra de registros activos se resuelve correctamente por búsqueda
-   dicotómica en cada índice: la clave encontrada apunta a un offset que contiene
-   realmente ese registro. Un índice con offsets obsoletos se delata aquí.
-4. Tras `PACK()` no queda ningún registro marcado para borrado.
-5. `PACK()` deja los índices marcados como desactualizados (los offsets cambiaron).
+```powershell
+java -cp bin pe.edu.unmsm.lsdfms.qa.StressTest `
+  --records 100000 `
+  --cycles 2 `
+  --seed 2026
+```
 
-Resultado de la corrida de referencia (20,000 registros, 3 ciclos):
-20,000 → 16,000 → 12,800 → 10,240 registros, **integridad verificada en todos los
-ciclos**.
+El comando anterior genera un dataset temporal, ejecuta ciclos de borrado,
+inserción, INDEX, PACK y verificación, y elimina el directorio al terminar.
+Con `--keep` conserva el directorio para inspección.
+
+Resultado de referencia: 100,000 registros, 2 ciclos, 16,000 comprobaciones de
+índice por etapa y **0 errores**.
 
 ---
 
-## 5. Integración de `PACK()` en el servidor
+## 6. Pruebas
 
-`PACK()` ya se ejecuta de verdad en el ciclo de mantenimiento (RF-07).
-`ParallelPackEngine` nunca reemplaza su archivo de origen — escribe el compactado
-aparte —, así que el paso de publicación lo añade
-`pe.edu.unmsm.lsdfms.pack.StoragePackAdapter`:
-
-1. Compacta el archivo activo hacia un hermano `.packed`.
-2. `StorageEngine.replaceDataFile(...)` cierra el descriptor, reemplaza el archivo
-   de forma atómica, lo reabre y reconstruye offsets y contadores desde el contenido
-   nuevo, dejando los índices marcados como desactualizados.
-3. Si algo falla, el archivo activo queda intacto y el temporal se descarta.
-
-El descriptor se cierra antes de mover el archivo porque en Windows un handle
-abierto impide reemplazar el destino. Solo lo invoca el hilo del `QueueDispatcher`,
-único escritor del archivo, por lo que no hay mutaciones concurrentes (RNF-02).
-
-Verificación extremo a extremo desde la API (5000 registros, 40% marcados):
-
+```powershell
+java -ea -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGeneratorTest
+java -ea -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkSmokeTest
+java -ea -cp bin pe.edu.unmsm.lsdfms.qa.IntegrityCheckerTest
 ```
-antes:   totalRecords=5000  activos=3003  marcados=1997  471,426 bytes
-después: totalRecords=3003  activos=3003  marcados=0     283,253 bytes  (−40%)
-```
+
+Las tres pruebas usan datasets pequeños y no dependen de servicios externos.
+
+---
+
+## 7. Limitaciones y dependencias externas
+
+1. **PACK paralelo no muestra ganancia con el código actual.** En las mediciones
+   de este módulo, `ParallelPackEngine` fue más lento que la referencia
+   secuencial. La causa probable está en `PartitionWorker`: asigna un
+   `byte[64 * 1024]` nuevo por cada registro activo, lo que genera una presión
+   de GC muy alta. Corregirlo corresponde a Anderson (módulo 3); este módulo no
+   modifica su código.
+2. **PACK no está integrado al servidor ni actualiza el archivo activo o la
+   Metadata.** El benchmark es standalone, a nivel de motor. La integración
+   coordinada corresponde a Alejandro/Anderson.
+3. **INDEX no tiene `threads=1` oficial.** El baseline T1 se construyó con una
+   columna a la vez usando el mismo motor. Si Jerson expone `threads=1`, se
+   puede reemplazar el baseline sin cambiar el runner.
+4. **INDEX con 8 hilos y 4 columnas:** solo hay 4 tareas; los hilos adicionales
+   no aportan paralelismo. Por eso la eficiencia con 8 hilos es baja.
+5. **El cliente web no es dependencia de este módulo.** La interfaz de Cicilis
+   puede consumir después los CSV o los datasets, pero el generador, los
+   benchmarks y el QA se ejecutan por consola.

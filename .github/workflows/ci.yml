@@ -24,14 +24,14 @@ jobs:
     - name: Compilar codigo Java nativo
       run: |
         mkdir -p bin data
-        find src/main/java -name "*.java" > sources.txt
-        javac -d bin -sourcepath src/main/java @sources.txt
+        find src/main/java src/test/java -name "*.java" > sources.txt
+        javac -d bin -sourcepath src/main/java:src/test/java @sources.txt
         rm -f sources.txt
 
     - name: Ejecutar Test de Concurrencia de la Cola (Brandon)
       run: |
         java -cp bin pe.edu.unmsm.lsdfms.queue.QueueConcurrencyTest
 
-    - name: Verificar integridad referencial tras PACK e INDEX (Arancivia)
+    - name: Verificar publicacion del archivo compactado (PACK en mantenimiento)
       run: |
-        java -cp bin pe.edu.unmsm.lsdfms.qa.QaSuite 5000 2
+        java -cp bin pe.edu.unmsm.lsdfms.pack.StoragePackAdapterTest

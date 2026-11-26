@@ -1,237 +1,249 @@
 package pe.edu.unmsm.lsdfms.benchmark;
 
-import pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator;
+import pe.edu.unmsm.lsdfms.index.IndexResult;
 import pe.edu.unmsm.lsdfms.index.ParallelIndexEngine;
-import pe.edu.unmsm.lsdfms.model.InsurancePolicy;
 import pe.edu.unmsm.lsdfms.pack.PackResult;
 import pe.edu.unmsm.lsdfms.pack.ParallelPackEngine;
 import pe.edu.unmsm.lsdfms.storage.Metadata;
-import pe.edu.unmsm.lsdfms.storage.StorageEngine;
+import pe.edu.unmsm.lsdfms.storage.MetadataRepository;
 
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 
 /**
- * Mide PACK() e INDEX() con 1, 2, 4 y 8 hilos sobre el mismo dataset y calcula
- * Speedup y eficiencia (RNF-03).
+ * Runner de benchmarks de PACK e INDEX.
  *
- *   java -Xmx2g -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkRunner 1000000 3 docs/benchmark.csv
+ * <p>Para T1 usa una implementacion secuencial de referencia. En INDEX, el
+ * baseline ejecuta una columna a la vez con el mismo motor de produccion
+ * ({@code ParallelIndexEngine} con un solo hilo), de modo que el trabajo total
+ * sea equivalente al de la version paralela por columnas.</p>
+ *
+ * <p>Los benchmarks se ejecutan sobre copias en un directorio temporal para no
+ * contaminar el dataset fuente ni verse afectados por el directorio de trabajo.</p>
  */
 public final class BenchmarkRunner {
 
-    private static final int[] THREAD_COUNTS = {1, 2, 4, 8};
-    private static final double DELETED_RATIO = 0.30;
+    private BenchmarkRunner() {}
 
-    private final Path workspace;
-    private final long records;
-    private final int repetitions;
-
-    private final List<SpeedupMetrics.Measurement> packMeasurements = new ArrayList<>();
-    private final List<SpeedupMetrics.Measurement> indexMeasurements = new ArrayList<>();
-
-    public BenchmarkRunner(Path workspace, long records, int repetitions) {
-        this.workspace = workspace.toAbsolutePath().normalize();
-        this.records = records;
-        this.repetitions = Math.max(1, repetitions);
-    }
-
-    public static void main(String[] args) throws Exception {
-        long records = args.length > 0 ? Long.parseLong(args[0]) : 200_000L;
-        int repetitions = args.length > 1 ? Integer.parseInt(args[1]) : 3;
-        Path csv = args.length > 2 ? Path.of(args[2]) : null;
-
-        BenchmarkRunner runner = new BenchmarkRunner(Path.of("data", "benchmark"), records, repetitions);
-        runner.run();
-        runner.printReport();
-        if (csv != null) {
-            runner.exportCsv(csv);
-            System.out.println("Resultados exportados a: " + csv.toAbsolutePath().normalize());
+    public static List<BenchmarkResult> run(BenchmarkConfig config) throws Exception {
+        if (!Files.isRegularFile(config.dataFile())) {
+            throw new IOException("No existe el dataset: " + config.dataFile());
         }
+        if (!Files.isRegularFile(config.metadataFile())) {
+            throw new IOException("No existe la metadata: " + config.metadataFile());
+        }
+        Metadata metadata = new MetadataRepository(config.metadataFile().toFile()).load();
+        List<String> columns = metadata.getIndexedColumns();
+        if (columns == null || columns.isEmpty()) {
+            columns = List.of("id", "dni", "departamento", "tipoSeguro");
+        }
+
+        List<BenchmarkResult> results = new ArrayList<>();
+        for (BenchmarkConfig.Operation operation : config.operations()) {
+            switch (operation) {
+                case PACK -> results.addAll(runPack(config, metadata));
+                case INDEX -> results.addAll(runIndex(config, metadata, columns));
+            }
+        }
+        SpeedupMetrics.apply(results);
+        SpeedupMetrics.writeCsv(config.csvFile(), results);
+        return results;
     }
 
-    public void run() throws IOException, InterruptedException {
-        Files.createDirectories(workspace);
-        Path dataset = workspace.resolve("benchmark_data.dat");
+    private static List<BenchmarkResult> runPack(BenchmarkConfig config, Metadata metadata)
+            throws Exception {
+        List<BenchmarkResult> results = new ArrayList<>();
+        long records = metadata.getTotalRecords();
+        long active = metadata.getActiveRecords();
+        long deleted = metadata.getDeletedRecords();
 
-        System.out.println("==================================================================");
-        System.out.println("  BENCHMARK DE PACK() e INDEX() - Modulo 6 (Arancivia)            ");
-        System.out.println("  RNF-03: Speedup y eficiencia frente a la version secuencial      ");
-        System.out.println("==================================================================");
-        System.out.printf("Procesadores disponibles : %d%n", Runtime.getRuntime().availableProcessors());
-        System.out.printf("Memoria maxima de la JVM : %,d MB%n",
-                Runtime.getRuntime().maxMemory() / (1024 * 1024));
-        System.out.printf("Registros del dataset    : %,d (%.0f%% marcados para borrado)%n",
-                records, DELETED_RATIO * 100);
-        System.out.printf("Repeticiones por medida  : %d (se reporta el mejor tiempo)%n%n", repetitions);
+        for (int threads : config.threads()) {
+            double[] samples = new double[config.repetitions()];
+            for (int run = 0; run < config.warmup() + config.repetitions(); run++) {
+                Path work = Files.createTempDirectory("lsdfms-bench-pack-");
+                try {
+                    Path source = work.resolve("source.dat");
+                    Path output = work.resolve("compacted.dat");
+                    Files.copy(config.dataFile(), source, StandardCopyOption.REPLACE_EXISTING);
 
-        System.out.println("[1/3] Generando dataset sintetico de longitud variable...");
-        MassiveDataGenerator.Result generated =
-                MassiveDataGenerator.generate(dataset, records, DELETED_RATIO, 20261126L);
-        System.out.printf("      %,d registros | %.2f MB | %,d ms%n%n",
-                generated.getRecords(), generated.getBytes() / (1024.0 * 1024.0),
-                generated.getElapsedMillis());
+                    long started = System.nanoTime();
+                    long read;
+                    long kept;
+                    long discarded;
+                    if (threads == 1) {
+                        SequentialPackResult result = new SequentialPackEngine().pack(source, output);
+                        read = result.getRecordsRead();
+                        kept = result.getActiveRecords();
+                        discarded = result.getDeletedRecords();
+                    } else {
+                        PackResult result = new ParallelPackEngine().pack(source, output, threads);
+                        read = result.getOriginalRecords();
+                        kept = result.getActiveRecords();
+                        discarded = result.getDeletedRecords();
+                    }
+                    double durationMs = (System.nanoTime() - started) / 1_000_000.0;
 
-        System.out.println("[2/3] Midiendo PACK() (paralelismo a nivel de datos)...");
-        measurePack(dataset, generated);
-
-        System.out.println();
-        System.out.println("[3/3] Midiendo INDEX() (paralelismo a nivel de tareas)...");
-        measureIndex(dataset);
-    }
-
-    private void measurePack(Path dataset, MassiveDataGenerator.Result generated)
-            throws IOException, InterruptedException {
-        ParallelPackEngine engine = new ParallelPackEngine();
-        Path output = workspace.resolve("benchmark_data.packed");
-
-        // Calentamiento descartado: evita medir la compilacion JIT.
-        Files.deleteIfExists(output);
-        engine.pack(dataset, output, 1);
-        Files.deleteIfExists(output);
-
-        for (int threads : THREAD_COUNTS) {
-            long best = Long.MAX_VALUE;
-            long kept = 0;
-            for (int r = 0; r < repetitions; r++) {
-                Files.deleteIfExists(output);
-                PackResult result = engine.pack(dataset, output, threads);
-                best = Math.min(best, result.getElapsedMillis());
-                kept = result.getActiveRecords();
-
-                if (result.getOriginalRecords() != generated.getRecords()
-                        || result.getActiveRecords() != generated.getActiveRecords()) {
-                    throw new IOException("PACK con " + threads + " hilos produjo un conteo distinto: "
-                            + result.getActiveRecords() + " activos frente a "
-                            + generated.getActiveRecords() + " esperados");
+                    if (read != records || kept != active || discarded != deleted) {
+                        throw new IllegalStateException(String.format(Locale.ROOT,
+                                "PACK hilos=%d contadores inesperados: read=%d kept=%d discarded=%d",
+                                threads, read, kept, discarded));
+                    }
+                    if (Files.size(source) != Files.size(config.dataFile())) {
+                        throw new IllegalStateException("El PACK modifico el archivo de origen");
+                    }
+                    if (!Files.isRegularFile(output)) {
+                        throw new IllegalStateException("El PACK no genero la salida");
+                    }
+                    if (run >= config.warmup()) {
+                        samples[run - config.warmup()] = durationMs;
+                    }
+                } finally {
+                    deleteTree(work);
                 }
             }
-            Files.deleteIfExists(output);
-            packMeasurements.add(new SpeedupMetrics.Measurement("PACK", threads, best, records));
-            System.out.printf("      %d hilo%s: %,6d ms  (%,d registros conservados)%n",
-                    threads, threads == 1 ? " " : "s", best, kept);
+            results.add(new BenchmarkResult("PACK", records, active, deleted, threads,
+                    median(samples)));
         }
+        return results;
     }
 
-    private void measureIndex(Path dataset) throws IOException, InterruptedException {
-        StorageEngine view = new DatasetView(dataset);
+    private static List<BenchmarkResult> runIndex(BenchmarkConfig config, Metadata metadata,
+                                                  List<String> columns) throws Exception {
+        List<BenchmarkResult> results = new ArrayList<>();
+        long records = metadata.getTotalRecords();
+        long active = metadata.getActiveRecords();
+        long deleted = metadata.getDeletedRecords();
 
-        new ParallelIndexEngine(workspace, 1).rebuildAllIndexes(view); // calentamiento
+        for (int threads : config.threads()) {
+            double[] samples = new double[config.repetitions()];
+            for (int run = 0; run < config.warmup() + config.repetitions(); run++) {
+                Path work = Files.createTempDirectory("lsdfms-bench-index-");
+                try {
+                    Path source = work.resolve("dataset.dat");
+                    Files.copy(config.dataFile(), source, StandardCopyOption.REPLACE_EXISTING);
 
-        for (int threads : THREAD_COUNTS) {
-            long best = Long.MAX_VALUE;
-            long indexed = 0;
-            for (int r = 0; r < repetitions; r++) {
-                ParallelIndexEngine engine = new ParallelIndexEngine(workspace, threads);
-                long started = System.nanoTime();
-                engine.rebuildAllIndexes(view);
-                long elapsed = (System.nanoTime() - started) / 1_000_000L;
-                best = Math.min(best, elapsed);
-                indexed = engine.getLastResult().getRecordsIndexed();
-            }
-            indexMeasurements.add(new SpeedupMetrics.Measurement("INDEX", threads, best, records));
-            System.out.printf("      %d hilo%s: %,6d ms  (%,d entradas por columna)%n",
-                    threads, threads == 1 ? " " : "s", best, indexed);
-        }
-    }
-
-    public void printReport() {
-        System.out.println();
-        System.out.println("==================================================================");
-        System.out.println("  TABLA COMPARATIVA DE RENDIMIENTO                                ");
-        System.out.println("==================================================================");
-        printTable("PACK()  - paralelismo a nivel de datos", packMeasurements);
-        System.out.println();
-        printTable("INDEX() - paralelismo a nivel de tareas", indexMeasurements);
-        System.out.println();
-        System.out.println("S(p) = T(1)/T(p)   |   E(p) = S(p)/p   |   f = fraccion paralela (Amdahl)");
-        System.out.println("==================================================================");
-    }
-
-    private void printTable(String title, List<SpeedupMetrics.Measurement> measurements) {
-        System.out.println(title);
-        System.out.println("  +--------+------------+-----------+------------+-----------+------------+");
-        System.out.println("  | Hilos  | Tiempo(ms) |  Speedup  | Eficiencia | reg/s     | f (Amdahl) |");
-        System.out.println("  +--------+------------+-----------+------------+-----------+------------+");
-
-        long baseline = measurements.isEmpty() ? 0 : measurements.get(0).getElapsedMillis();
-        for (SpeedupMetrics.Measurement m : measurements) {
-            double s = SpeedupMetrics.speedup(baseline, m.getElapsedMillis());
-            double e = SpeedupMetrics.efficiency(baseline, m.getElapsedMillis(), m.getThreads());
-            double f = SpeedupMetrics.amdahlParallelFraction(s, m.getThreads());
-            System.out.printf("  | %-6d | %,10d | %9s | %10s | %9s | %10s |%n",
-                    m.getThreads(), m.getElapsedMillis(),
-                    m.getThreads() == 1 ? "base" : SpeedupMetrics.formatDouble(s) + "x",
-                    m.getThreads() == 1 ? "-" : SpeedupMetrics.formatPercent(e),
-                    Double.isNaN(m.throughput()) ? "n/d" : String.format("%,.0f", m.throughput()),
-                    m.getThreads() == 1 ? "-" : SpeedupMetrics.formatDouble(f));
-        }
-        System.out.println("  +--------+------------+-----------+------------+-----------+------------+");
-    }
-
-    public void exportCsv(Path csv) throws IOException {
-        Path file = csv.toAbsolutePath().normalize();
-        if (file.getParent() != null) Files.createDirectories(file.getParent());
-
-        Map<String, List<SpeedupMetrics.Measurement>> grupos = new LinkedHashMap<>();
-        grupos.put("PACK", packMeasurements);
-        grupos.put("INDEX", indexMeasurements);
-
-        try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
-            out.println("operacion,registros,hilos,tiempo_ms,speedup,eficiencia,registros_por_segundo");
-            for (Map.Entry<String, List<SpeedupMetrics.Measurement>> grupo : grupos.entrySet()) {
-                List<SpeedupMetrics.Measurement> items = grupo.getValue();
-                long baseline = items.isEmpty() ? 0 : items.get(0).getElapsedMillis();
-                for (SpeedupMetrics.Measurement m : items) {
-                    out.printf("%s,%d,%d,%d,%s,%s,%s%n",
-                            grupo.getKey(), m.getRecordsProcessed(), m.getThreads(), m.getElapsedMillis(),
-                            csvDouble(SpeedupMetrics.speedup(baseline, m.getElapsedMillis())),
-                            csvDouble(SpeedupMetrics.efficiency(baseline, m.getElapsedMillis(), m.getThreads())),
-                            csvDouble(m.throughput()));
+                    double durationMs;
+                    if (threads == 1) {
+                        durationMs = runSequentialIndex(work, source, config.metadataFile(),
+                                columns, records, active, deleted);
+                    } else {
+                        BenchmarkStorage storage = new BenchmarkStorage(source,
+                                config.metadataFile(), columns);
+                        ParallelIndexEngine engine = new ParallelIndexEngine(work, threads);
+                        long started = System.nanoTime();
+                        engine.rebuildAllIndexes(storage);
+                        durationMs = (System.nanoTime() - started) / 1_000_000.0;
+                        validateIndex(engine.getLastResult(), records, active, deleted, threads);
+                    }
+                    if (run >= config.warmup()) {
+                        samples[run - config.warmup()] = durationMs;
+                    }
+                } finally {
+                    deleteTree(work);
                 }
             }
+            results.add(new BenchmarkResult("INDEX", records, active, deleted, threads,
+                    median(samples)));
         }
+        return results;
     }
-
-    private static String csvDouble(double value) {
-        return Double.isNaN(value) ? "" : String.format(java.util.Locale.ROOT, "%.4f", value);
-    }
-
-    public List<SpeedupMetrics.Measurement> getPackMeasurements() { return List.copyOf(packMeasurements); }
-    public List<SpeedupMetrics.Measurement> getIndexMeasurements() { return List.copyOf(indexMeasurements); }
 
     /**
-     * ParallelIndexEngine solo necesita el archivo activo y las columnas indexables.
-     * Evita cargar el mapa de offsets de millones de registros de RafStorageEngine.
+     * Baseline secuencial de INDEX: ejecuta una columna a la vez. Cada columna
+     * usa un pool de un solo hilo (threads=0 con una unica columna).
      */
-    private static final class DatasetView implements StorageEngine {
-        private final Metadata metadata = new Metadata();
+    private static double runSequentialIndex(Path work, Path source, Path metadataFile,
+                                             List<String> columns, long records,
+                                             long active, long deleted) throws Exception {
+        double totalMs = 0.0;
+        for (String column : columns) {
+            BenchmarkStorage storage = new BenchmarkStorage(source, metadataFile, List.of(column));
+            ParallelIndexEngine engine = new ParallelIndexEngine(work, 0);
+            long started = System.nanoTime();
+            engine.rebuildAllIndexes(storage);
+            totalMs += (System.nanoTime() - started) / 1_000_000.0;
+            validateIndex(engine.getLastResult(), records, active, deleted, 1);
+        }
+        return totalMs;
+    }
 
-        DatasetView(Path dataset) {
-            metadata.setActiveDataFile(dataset.toAbsolutePath().normalize().toString());
+    private static void validateIndex(IndexResult result, long records, long active,
+                                      long deleted, int threads) {
+        if (result == null) {
+            throw new IllegalStateException("INDEX no produjo resultado");
         }
+        if (result.getRecordsRead() != records
+                || result.getRecordsIndexed() != active
+                || result.getRecordsDeleted() != deleted) {
+            throw new IllegalStateException(String.format(Locale.ROOT,
+                    "INDEX hilos=%d contadores inesperados: read=%d indexed=%d deleted=%d",
+                    threads, result.getRecordsRead(), result.getRecordsIndexed(),
+                    result.getRecordsDeleted()));
+        }
+    }
 
-        @Override public Metadata getMetadata() { return metadata; }
-        @Override public void saveMetadata() { }
-        @Override public void close() { }
+    private static double median(double[] values) {
+        if (values.length == 0) {
+            throw new IllegalStateException("Sin muestras de benchmark");
+        }
+        double[] copy = Arrays.copyOf(values, values.length);
+        Arrays.sort(copy);
+        int middle = copy.length / 2;
+        return copy.length % 2 == 0
+                ? (copy[middle - 1] + copy[middle]) / 2.0
+                : copy[middle];
+    }
 
-        @Override public long insert(InsurancePolicy record) {
-            throw new UnsupportedOperationException("Vista de solo lectura del benchmark");
+    private static void deleteTree(Path directory) {
+        if (directory == null || !Files.exists(directory)) {
+            return;
         }
-        @Override public InsurancePolicy readAt(long offset) {
-            throw new UnsupportedOperationException("Vista de solo lectura del benchmark");
+        try (java.util.stream.Stream<Path> paths = Files.walk(directory)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // El benchmark no debe fallar por un temporal que el SO libere despues.
+                }
+            });
+        } catch (IOException ignored) {
+            // Limpieza best-effort.
         }
-        @Override public boolean markAsDeleted(long offset) {
-            throw new UnsupportedOperationException("Vista de solo lectura del benchmark");
-        }
-        @Override public long getFileSize() throws IOException {
-            return Files.size(Path.of(metadata.getActiveDataFile()));
+    }
+
+    public static void main(String[] args) {
+        try {
+            BenchmarkConfig config = BenchmarkConfig.fromArgs(args);
+            List<BenchmarkResult> results = run(config);
+            Metadata metadata = new MetadataRepository(config.metadataFile().toFile()).load();
+            System.out.println("=========================================================");
+            System.out.println("  LSDFMS - Benchmark de PACK e INDEX");
+            System.out.println("=========================================================");
+            System.out.println("Dataset : " + config.dataFile());
+            System.out.println("Registros: " + metadata.getTotalRecords()
+                    + " (activos=" + metadata.getActiveRecords()
+                    + ", eliminados=" + metadata.getDeletedRecords() + ")");
+            System.out.println("Repeticiones: " + config.repetitions()
+                    + " | warmup: " + config.warmup());
+            System.out.println("---------------------------------------------------------");
+            SpeedupMetrics.printSummary(results);
+            System.out.println("---------------------------------------------------------");
+            System.out.println("CSV: " + config.csvFile());
+        } catch (IllegalArgumentException e) {
+            System.err.println("Error de argumentos: " + e.getMessage());
+            BenchmarkConfig.printHelp();
+            System.exit(2);
+        } catch (Exception e) {
+            System.err.println("Error ejecutando benchmarks: " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
         }
     }
 }
