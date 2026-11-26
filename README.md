@@ -26,8 +26,9 @@ Diseñar e implementar desde cero en **Java estándar (JDK)** un Sistema de Gest
 
 Para evitar bloqueos y colisiones de código entre los 6 integrantes:
 1. **Ramas independientes:** Cada integrante trabaja exclusivamente en su propia rama (`feature/modulo-X-...`).
-2. **Autoridad de Merge a `main`:** **Alejandro** es el Líder de Integración General y el **único responsable de autorizar y hacer merge hacia la rama `main`** mediante Pull Requests.
-3. **Detalles completos:** Ver [`docs/POLITICA_GIT_Y_COLABORACION.md`](docs/POLITICA_GIT_Y_COLABORACION.md).
+2. **Prohibido el Auto-Merge:** Ningún integrante puede aprobar o mergear su propio PR. Los PRs de los módulos deben ser revisados y aprobados por **Alejandro** (Líder de Integración), y el PR de Alejandro debe ser aprobado por otro integrante.
+3. **Validación Automática (CI):** Cada PR ejecuta automáticamente un flujo de GitHub Actions que compila y verifica los tests de concurrencia antes de habilitar el merge.
+4. **Detalles y configuración de GitHub:** Ver [`docs/POLITICA_GIT_Y_COLABORACION.md`](docs/POLITICA_GIT_Y_COLABORACION.md).
 
 | Rama | Responsable | Módulo |
 |---|---|---|
