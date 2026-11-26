@@ -3,9 +3,12 @@ package pe.edu.unmsm.lsdfms.server;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import pe.edu.unmsm.lsdfms.index.IndexEngine;
 import pe.edu.unmsm.lsdfms.model.InsurancePolicy;
+import pe.edu.unmsm.lsdfms.pack.PackEngine;
 import pe.edu.unmsm.lsdfms.queue.QueueDispatcher;
 import pe.edu.unmsm.lsdfms.queue.RequestCommand;
+import pe.edu.unmsm.lsdfms.queue.RequestType;
 import pe.edu.unmsm.lsdfms.queue.ResponseResult;
 import pe.edu.unmsm.lsdfms.queue.ThreadSafeRequestQueue;
 import pe.edu.unmsm.lsdfms.storage.StorageEngine;
@@ -27,6 +30,7 @@ import java.util.concurrent.TimeUnit;
  * Cumple con:
  *  - RF-03: Endpoints REST para CRUD y consultas.
  *  - RF-04: Recibe peticiones y las encola en ThreadSafeRequestQueue.
+ *  - RF-07: Endpoint de Mantenimiento coordinado en la nube (PACK + INDEX).
  *  - RNF-01: Implementado exclusivamente con com.sun.net.httpserver.HttpServer.
  *  - RNF-04: Listo para desplegar en instancias de nube (AWS EC2 / Azure VM / GCP).
  */
@@ -37,6 +41,7 @@ public class NativeHttpServer {
     private final ThreadSafeRequestQueue requestQueue;
     private final QueueDispatcher queueDispatcher;
 
+    private IndexEngine indexEngine;
     private HttpServer server;
     private ExecutorService threadPool;
 
@@ -45,6 +50,15 @@ public class NativeHttpServer {
         this.storageEngine = storageEngine;
         this.requestQueue = new ThreadSafeRequestQueue(queueCapacity);
         this.queueDispatcher = new QueueDispatcher(this.requestQueue, this.storageEngine);
+    }
+
+    public void setPackEngine(PackEngine packEngine) {
+        this.queueDispatcher.setPackEngine(packEngine);
+    }
+
+    public void setIndexEngine(IndexEngine indexEngine) {
+        this.indexEngine = indexEngine;
+        this.queueDispatcher.setIndexEngine(indexEngine);
     }
 
     public synchronized void start() throws IOException {
@@ -62,6 +76,8 @@ public class NativeHttpServer {
 
         // Registro de Handlers REST
         this.server.createContext("/api/policies", new PoliciesHandler());
+        this.server.createContext("/api/search", new SearchHandler());
+        this.server.createContext("/api/maintenance", new MaintenanceHandler());
         this.server.createContext("/api/status", new StatusHandler());
         this.server.createContext("/api/health", new HealthHandler());
         this.server.createContext("/", new StaticFileHandler());
@@ -122,7 +138,6 @@ public class NativeHttpServer {
             RequestCommand<InsurancePolicy> cmd = RequestCommand.ofInsert(policy);
             requestQueue.enqueue(cmd);
 
-            // Esperar resultado procesado por el hilo despachador
             ResponseResult result = cmd.getFutureResponse().get(5, TimeUnit.SECONDS);
 
             if (result.isSuccess()) {
@@ -152,7 +167,6 @@ public class NativeHttpServer {
         }
 
         private void handleGet(HttpExchange exchange) throws IOException {
-            // Operacion de solo lectura: concurrente directa sobre el storage sin encolar (RF-03)
             Map<String, String> query = parseQuery(exchange.getRequestURI());
             if (!query.containsKey("offset")) {
                 sendJson(exchange, 400, SimpleJson.responseMessage(false, "Parametro 'offset' es requerido", -1));
@@ -171,6 +185,84 @@ public class NativeHttpServer {
                 sendJson(exchange, 501, SimpleJson.responseMessage(false, "Modulo de Storage aun no implementado por Alejandro", offset));
             } catch (Exception e) {
                 sendJson(exchange, 404, SimpleJson.responseMessage(false, "Error leyendo offset " + offset + ": " + e.getMessage(), offset));
+            }
+        }
+    }
+
+    /**
+     * Handler de Busqueda Rapida O(log n) por indice (RF-02)
+     */
+    private class SearchHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            addCorsHeaders(exchange);
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            Map<String, String> query = parseQuery(exchange.getRequestURI());
+            String column = query.get("column");
+            String key = query.get("key");
+
+            if (column == null || key == null) {
+                sendJson(exchange, 400, SimpleJson.responseMessage(false, "Parametros 'column' y 'key' son obligatorios", -1));
+                return;
+            }
+
+            if (indexEngine == null) {
+                sendJson(exchange, 503, SimpleJson.responseMessage(false, "Motor de indices (Jerson) en construccion", -1));
+                return;
+            }
+
+            try {
+                long offset = indexEngine.searchOffset(column, key);
+                if (offset < 0) {
+                    sendJson(exchange, 404, SimpleJson.responseMessage(false, "No se encontro ningun registro para " + column + "=" + key, -1));
+                } else {
+                    InsurancePolicy policy = storageEngine.readAt(offset);
+                    sendJson(exchange, 200, SimpleJson.policyToJson(policy, offset));
+                }
+            } catch (Exception e) {
+                sendJson(exchange, 500, SimpleJson.responseMessage(false, "Error en busqueda: " + e.getMessage(), -1));
+            }
+        }
+    }
+
+    /**
+     * Handler de Mantenimiento Coordinado PACK e INDEX en la nube (RF-07)
+     */
+    private class MaintenanceHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            addCorsHeaders(exchange);
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, SimpleJson.responseMessage(false, "Solo se permite POST para mantenimiento", -1));
+                return;
+            }
+
+            try {
+                // 1. Encolar PACK
+                RequestCommand<Void> packCmd = new RequestCommand<>(RequestType.MAINTENANCE_PACK, null, -1);
+                requestQueue.enqueue(packCmd);
+                ResponseResult packRes = packCmd.getFutureResponse().get(30, TimeUnit.SECONDS);
+
+                // 2. Encolar INDEX
+                RequestCommand<Void> indexCmd = new RequestCommand<>(RequestType.MAINTENANCE_INDEX, null, -1);
+                requestQueue.enqueue(indexCmd);
+                ResponseResult indexRes = indexCmd.getFutureResponse().get(30, TimeUnit.SECONDS);
+
+                boolean ok = packRes.isSuccess() && indexRes.isSuccess();
+                String msg = "Mantenimiento completado. " + packRes.getMessage() + " | " + indexRes.getMessage();
+                sendJson(exchange, 200, SimpleJson.responseMessage(ok, msg, -1));
+
+            } catch (Exception e) {
+                sendJson(exchange, 500, SimpleJson.responseMessage(false, "Error en ciclo de mantenimiento: " + e.getMessage(), -1));
             }
         }
     }
