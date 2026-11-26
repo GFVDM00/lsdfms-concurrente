@@ -87,7 +87,7 @@ public final class ParallelIndexEngineTest {
     }
 
     private static void testThreadCounts(Path root) throws Exception {
-        for (int threads : new int[]{0, 2, 4, 8}) {
+        for (int threads : new int[]{0, 1, 2, 4, 8}) {
             Path dir = Files.createDirectory(root.resolve("threads-" + threads));
             Path data = writeFixture(dir, 47, true);
             List<Row> rows = readRows(data);

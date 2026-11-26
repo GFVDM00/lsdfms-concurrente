@@ -150,7 +150,7 @@ Documentación detallada:
 - [`docs/GUIA_ARANCIVIA_GENERADOR_BENCHMARK_QA.md`](docs/GUIA_ARANCIVIA_GENERADOR_BENCHMARK_QA.md)
 - [`docs/RESULTADOS_BENCHMARK.md`](docs/RESULTADOS_BENCHMARK.md)
 
-> **Nota:** PACK todavía no está integrado con el servidor y, con el código
-> actual, su versión paralela no muestra ganancia frente a la secuencial. La
-> corrección de rendimiento corresponde al módulo 3; este módulo documenta el
-> hallazgo y mantiene sus benchmarks standalone.
+> **Estado:** PACK ya está integrado con el servidor, el archivo activo y la
+> Metadata. Su versión paralela aún no muestra una ganancia estable frente a la
+> secuencial en 100k/500k; en 2M con 8 hilos se midió 1.13×. Los detalles y las
+> limitaciones están en `docs/RESULTADOS_BENCHMARK.md`.

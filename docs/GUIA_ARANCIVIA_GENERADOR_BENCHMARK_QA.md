@@ -4,8 +4,9 @@
 
 **Requerimientos cubiertos:** RNF-03 (escalabilidad y métricas), apoyo a RF-01/RF-05/RF-06 y QA de integridad.
 
-Este módulo es independiente del cliente web y del servidor HTTP. Se ejecuta
-por consola contra las clases Java del motor de almacenamiento, PACK e INDEX.
+Este módulo se ejecuta por consola contra las clases Java del motor de
+almacenamiento, PACK e INDEX. No requiere el cliente web; además, el servidor ya
+integra PACK e INDEX para el flujo completo.
 
 ---
 
@@ -49,18 +50,12 @@ src/main/java/pe/edu/unmsm/lsdfms/
 
 - **PACK:** T1 con `SequentialPackEngine` (implementación secuencial de
   referencia) y T2/T4/T8 con `ParallelPackEngine` de producción.
-- **INDEX:** T1 ejecuta una columna a la vez con `ParallelIndexEngine`
-  (`threads=0` y una sola columna = un hilo). T2/T4/T8 ejecutan todas las
-  columnas en paralelo con el motor de producción.
+- **INDEX:** T1 con `ParallelIndexEngine` y `threads=1` (todas las columnas en
+  un solo hilo); T2/T4/T8 con el número de hilos indicado.
 - Cada corrida usa una copia limpia del dataset en un directorio temporal; el
   tiempo de copia no se mide.
 - Se descarta el warmup y se usa la mediana de las repeticiones.
 - Salida CSV con tiempo, Speedup y eficiencia.
-
-> **Limitación de INDEX:** el motor de Jerson no expone `threads=1`. El baseline
-> T1 usa el mismo motor con una columna a la vez; es una comparación de tareas
-> equivalente (4 columnas secuenciales vs. 4 columnas concurrentes), no una
-> opción oficial `threads=1`.
 
 ### QA
 
@@ -176,7 +171,7 @@ Opciones:
 - Usar la misma JVM, los mismos flags y el mismo dataset para todos los hilos.
 - T1 = referencia secuencial.
 - Speedup = `T1 / Tp`; eficiencia = `Speedup / p`.
-- Para INDEX, T1 suma el tiempo de indexar cada columna por separado.
+- Para INDEX, T1 usa `ParallelIndexEngine` con `threads=1`.
 - Para PACK, T1 usa `SequentialPackEngine`; T2/T4/T8 usan `ParallelPackEngine`.
 - El warmup y las copias del dataset quedan fuera del tiempo medido.
 
@@ -216,28 +211,29 @@ Resultado de referencia: 100,000 registros, 2 ciclos, 16,000 comprobaciones de
 java -ea -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGeneratorTest
 java -ea -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkSmokeTest
 java -ea -cp bin pe.edu.unmsm.lsdfms.qa.IntegrityCheckerTest
+java -ea -cp bin pe.edu.unmsm.lsdfms.pack.PackEngineAdapterTest
+java -ea -cp bin pe.edu.unmsm.lsdfms.server.ServerIntegrationTest
 ```
 
-Las tres pruebas usan datasets pequeños y no dependen de servicios externos.
+Las pruebas usan datasets pequeños y no dependen de servicios externos.
 
 ---
 
-## 7. Limitaciones y dependencias externas
+## 7. Limitaciones y estado de integración
 
-1. **PACK paralelo no muestra ganancia con el código actual.** En las mediciones
-   de este módulo, `ParallelPackEngine` fue más lento que la referencia
-   secuencial. La causa probable está en `PartitionWorker`: asigna un
-   `byte[64 * 1024]` nuevo por cada registro activo, lo que genera una presión
-   de GC muy alta. Corregirlo corresponde a Anderson (módulo 3); este módulo no
-   modifica su código.
-2. **PACK no está integrado al servidor ni actualiza el archivo activo o la
-   Metadata.** El benchmark es standalone, a nivel de motor. La integración
-   coordinada corresponde a Alejandro/Anderson.
-3. **INDEX no tiene `threads=1` oficial.** El baseline T1 se construyó con una
-   columna a la vez usando el mismo motor. Si Jerson expone `threads=1`, se
-   puede reemplazar el baseline sin cambiar el runner.
-4. **INDEX con 8 hilos y 4 columnas:** solo hay 4 tareas; los hilos adicionales
-   no aportan paralelismo. Por eso la eficiencia con 8 hilos es baja.
-5. **El cliente web no es dependencia de este módulo.** La interfaz de Cicilis
-   puede consumir después los CSV o los datasets, pero el generador, los
-   benchmarks y el QA se ejecutan por consola.
+1. **PACK ya está integrado.** `PackEngineAdapter` compacta el archivo activo,
+   publica el resultado con `MutableStorageEngine.replaceActiveDataFile(...)` y
+   deja la Metadata marcada como no sincronizada para el INDEX posterior.
+2. **PACK aún no muestra una ganancia estable.** Se optimizó `PartitionWorker`
+   (buffer reutilizado, lectura/escritura secuencial) y se eliminó el `seek` por
+   registro. Aun así, el coste de snapshot, particionado, fusión y publicación
+   domina en 100k/500k. En 2M con 8 hilos se midió 1.13×; hace falta repetir la
+   campaña con más warmup y en la VM de nube.
+3. **INDEX con 8 hilos y 4 columnas:** solo hay 4 tareas independientes; los
+   hilos adicionales no aportan paralelismo. Por eso la eficiencia con 8 hilos
+   es baja.
+4. **El cliente web sigue siendo responsabilidad de Cicilis.** No es una
+   dependencia del generador, los benchmarks ni el QA.
+5. **El despliegue real en nube no se puede validar desde local.** El servidor y
+   `deploy.sh` quedan listos; la ejecución en AWS/Azure/GCP requiere la VM y
+   credenciales externas.

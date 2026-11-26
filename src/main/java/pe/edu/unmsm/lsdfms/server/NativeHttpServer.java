@@ -122,6 +122,7 @@ public class NativeHttpServer {
             try {
                 switch (method) {
                     case "POST" -> handleInsert(exchange);
+                    case "PUT" -> handleUpdate(exchange);
                     case "DELETE" -> handleDelete(exchange);
                     case "GET" -> handleGet(exchange);
                     default -> sendJson(exchange, 405, SimpleJson.responseMessage(false, "Metodo no permitido", -1));
@@ -144,6 +145,29 @@ public class NativeHttpServer {
                 sendJson(exchange, 201, SimpleJson.responseMessage(true, result.getMessage(), result.getAffectedOffset()));
             } else {
                 sendJson(exchange, 400, SimpleJson.responseMessage(false, result.getMessage(), -1));
+            }
+        }
+
+        private void handleUpdate(HttpExchange exchange) throws Exception {
+            Map<String, String> query = parseQuery(exchange.getRequestURI());
+            if (!query.containsKey("offset")) {
+                sendJson(exchange, 400, SimpleJson.responseMessage(false,
+                        "Parametro 'offset' es requerido", -1));
+                return;
+            }
+            long offset = Long.parseLong(query.get("offset"));
+            String body = readRequestBody(exchange);
+            InsurancePolicy policy = SimpleJson.parsePolicy(body);
+            RequestCommand<InsurancePolicy> cmd = RequestCommand.ofUpdate(offset, policy);
+            requestQueue.enqueue(cmd);
+
+            ResponseResult result = cmd.getFutureResponse().get(5, TimeUnit.SECONDS);
+            if (result.isSuccess()) {
+                sendJson(exchange, 200, SimpleJson.responseMessage(true,
+                        result.getMessage(), result.getAffectedOffset()));
+            } else {
+                sendJson(exchange, 404, SimpleJson.responseMessage(false,
+                        result.getMessage(), offset));
             }
         }
 
@@ -182,7 +206,8 @@ public class NativeHttpServer {
                     sendJson(exchange, 200, SimpleJson.policyToJson(policy, offset));
                 }
             } catch (UnsupportedOperationException e) {
-                sendJson(exchange, 501, SimpleJson.responseMessage(false, "Modulo de Storage aun no implementado por Alejandro", offset));
+                sendJson(exchange, 501, SimpleJson.responseMessage(false,
+                        "El motor de almacenamiento no soporta lectura directa", offset));
             } catch (Exception e) {
                 sendJson(exchange, 404, SimpleJson.responseMessage(false, "Error leyendo offset " + offset + ": " + e.getMessage(), offset));
             }
@@ -211,20 +236,33 @@ public class NativeHttpServer {
             }
 
             if (indexEngine == null) {
-                sendJson(exchange, 503, SimpleJson.responseMessage(false, "Motor de indices (Jerson) en construccion", -1));
+                sendJson(exchange, 503, SimpleJson.responseMessage(false,
+                        "Motor de indices no configurado", -1));
                 return;
             }
 
             try {
-                long offset = indexEngine.searchOffset(column, key);
+                Object searchKey = "id".equalsIgnoreCase(column) ? parseLongKey(key) : key;
+                long offset = indexEngine.searchOffset(column, searchKey);
                 if (offset < 0) {
                     sendJson(exchange, 404, SimpleJson.responseMessage(false, "No se encontro ningun registro para " + column + "=" + key, -1));
                 } else {
                     InsurancePolicy policy = storageEngine.readAt(offset);
                     sendJson(exchange, 200, SimpleJson.policyToJson(policy, offset));
                 }
+            } catch (NumberFormatException e) {
+                sendJson(exchange, 400, SimpleJson.responseMessage(false,
+                        "La clave de id debe ser numerica", -1));
             } catch (Exception e) {
                 sendJson(exchange, 500, SimpleJson.responseMessage(false, "Error en busqueda: " + e.getMessage(), -1));
+            }
+        }
+
+        private long parseLongKey(String key) {
+            try {
+                return Long.parseLong(key);
+            } catch (NumberFormatException e) {
+                throw new NumberFormatException("id no numerico: " + key);
             }
         }
     }
@@ -250,16 +288,21 @@ public class NativeHttpServer {
                 // 1. Encolar PACK
                 RequestCommand<Void> packCmd = new RequestCommand<>(RequestType.MAINTENANCE_PACK, null, -1);
                 requestQueue.enqueue(packCmd);
-                ResponseResult packRes = packCmd.getFutureResponse().get(30, TimeUnit.SECONDS);
+                ResponseResult packRes = packCmd.getFutureResponse().get(300, TimeUnit.SECONDS);
+                if (!packRes.isSuccess()) {
+                    sendJson(exchange, 500, SimpleJson.responseMessage(false,
+                            "PACK fallo: " + packRes.getMessage(), -1));
+                    return;
+                }
 
                 // 2. Encolar INDEX
                 RequestCommand<Void> indexCmd = new RequestCommand<>(RequestType.MAINTENANCE_INDEX, null, -1);
                 requestQueue.enqueue(indexCmd);
-                ResponseResult indexRes = indexCmd.getFutureResponse().get(30, TimeUnit.SECONDS);
+                ResponseResult indexRes = indexCmd.getFutureResponse().get(300, TimeUnit.SECONDS);
 
-                boolean ok = packRes.isSuccess() && indexRes.isSuccess();
+                boolean ok = indexRes.isSuccess();
                 String msg = "Mantenimiento completado. " + packRes.getMessage() + " | " + indexRes.getMessage();
-                sendJson(exchange, 200, SimpleJson.responseMessage(ok, msg, -1));
+                sendJson(exchange, ok ? 200 : 500, SimpleJson.responseMessage(ok, msg, -1));
 
             } catch (Exception e) {
                 sendJson(exchange, 500, SimpleJson.responseMessage(false, "Error en ciclo de mantenimiento: " + e.getMessage(), -1));

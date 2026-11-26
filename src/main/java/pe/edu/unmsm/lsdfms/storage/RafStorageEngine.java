@@ -10,6 +10,10 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
@@ -20,19 +24,20 @@ import java.util.Set;
  * RESPONSABLE: Alejandro (Módulo 1: Integración General, Motor LSDFMS y Metadata)
  * REQUERIMIENTOS: RF-01, RNF-01, RNF-02
  *
- * Tareas a implementar por Alejandro:
+ * Responsabilidades cubiertas:
  * 1. Inicializar RandomAccessFile en modo "rw" con el archivo dataFile.
- * 2. Implementar inserción de registros de longitud variable con offsets exactos (seek()).
- * 3. Implementar lectura por offset exacto deserializando campos de longitud variable.
- * 4. Implementar marcado de borrado lógico (0x01) en O(1) modificando el byte de cabecera.
+ * 2. Insertar registros de longitud variable con offsets exactos (seek()).
+ * 3. Leer por offset exacto deserializando campos de longitud variable.
+ * 4. Marcar borrado lógico (0x01) en O(1) modificando el byte de cabecera.
  * 5. Gestionar la sincronización de Metadata (MetadataRepository).
+ * 6. Publicar un archivo compactado como nuevo archivo activo (PACK).
  */
-public class RafStorageEngine implements StorageEngine {
+public class RafStorageEngine implements MutableStorageEngine {
 
     private final File dataFile;
     private final File metadataFile;
     private final MetadataRepository metadataRepository;
-    private final RandomAccessFile raf;
+    private RandomAccessFile raf;
     private final Set<Long> recordOffsets = new HashSet<>();
     private final ThreadLocal<Metadata> metadataView = new ThreadLocal<>();
     private Metadata metadata;
@@ -173,6 +178,51 @@ public class RafStorageEngine implements StorageEngine {
             }
             metadataView.remove();
             metadataRepository.save(metadata);
+        }
+    }
+
+    @Override
+    public synchronized Path activeDataFilePath() {
+        return dataFile.toPath().toAbsolutePath().normalize();
+    }
+
+    /**
+     * Publica un archivo compactado como nuevo archivo activo. El movimiento se
+     * hace dentro del mismo directorio para conservar la semantica atomica.
+     */
+    @Override
+    public synchronized void replaceActiveDataFile(Path newFile) throws IOException {
+        Objects.requireNonNull(newFile, "newFile no puede ser null");
+        Path replacement = newFile.toAbsolutePath().normalize();
+        Path target = dataFile.toPath().toAbsolutePath().normalize();
+        if (!Files.isRegularFile(replacement)) {
+            throw new IOException("Archivo compactado inexistente: " + replacement);
+        }
+        if (replacement.equals(target)) {
+            throw new IllegalArgumentException("El archivo compactado debe ser distinto del activo");
+        }
+
+        raf.close();
+        try {
+            try {
+                Files.move(replacement, target, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(replacement, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            raf = new RandomAccessFile(dataFile, "rw");
+            recordOffsets.clear();
+            rebuildRecordBoundaries(metadata.getActiveDataFile());
+            metadata.setLastCompactedAt(System.currentTimeMillis());
+            metadata.setIndexSynced(false);
+            metadataRepository.save(metadata);
+        } catch (IOException | RuntimeException failure) {
+            try {
+                raf = new RandomAccessFile(dataFile, "rw");
+            } catch (IOException reopenFailure) {
+                failure.addSuppressed(reopenFailure);
+            }
+            throw failure;
         }
     }
 

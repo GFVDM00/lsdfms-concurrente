@@ -3,6 +3,7 @@ package pe.edu.unmsm.lsdfms.server;
 import pe.edu.unmsm.lsdfms.index.IndexEngine;
 import pe.edu.unmsm.lsdfms.index.ParallelIndexEngine;
 import pe.edu.unmsm.lsdfms.model.InsurancePolicy;
+import pe.edu.unmsm.lsdfms.pack.PackEngineAdapter;
 import pe.edu.unmsm.lsdfms.storage.Metadata;
 import pe.edu.unmsm.lsdfms.storage.RafStorageEngine;
 import pe.edu.unmsm.lsdfms.storage.StorageEngine;
@@ -13,9 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Aplicación principal para ejecutar el Servidor HTTP nativo de Brandon (Módulo 2).
- * Puede operar con RafStorageEngine (cuando Alejandro lo complete) o con un motor
- * de desarrollo en memoria para pruebas desacopladas.
+ * Aplicacion principal del servidor HTTP nativo. Integra el motor de
+ * almacenamiento, la cola sincronizada, INDEX, PACK y la Metadata.
  */
 public class ServerApp {
 
@@ -38,6 +38,7 @@ public class ServerApp {
             NativeHttpServer server = new NativeHttpServer(port, engine, 500);
             IndexEngine indexEngine = new ParallelIndexEngine(new File("data").toPath());
             server.setIndexEngine(indexEngine);
+            server.setPackEngine(new PackEngineAdapter());
             server.start();
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -48,9 +49,11 @@ public class ServerApp {
             System.out.println("Servidor escuchando en http://localhost:" + port + "/");
             System.out.println("Endpoints disponibles:");
             System.out.println("  POST   /api/policies        -> Encolar insercion de registro");
+            System.out.println("  PUT    /api/policies?offset -> Encolar actualizacion (delete + insert)");
             System.out.println("  DELETE /api/policies?offset -> Encolar borrado logico");
             System.out.println("  GET    /api/policies?offset -> Lectura directa por offset");
             System.out.println("  GET    /api/search?column=&key= -> Busqueda O(log n) por indice");
+            System.out.println("  POST   /api/maintenance     -> PACK + INDEX coordinados");
             System.out.println("  GET    /api/status          -> Estado de metadata y cola");
             System.out.println("  GET    /api/health          -> Verificacion de salud (Cloud)");
             System.out.println("Presione Ctrl+C para detener.");

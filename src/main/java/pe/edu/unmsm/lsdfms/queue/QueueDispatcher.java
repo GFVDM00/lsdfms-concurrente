@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * consistencia y evitar carreras de escritura (RNF-02).
  *
  * Tambien coordina el ciclo de mantenimiento (RF-07) ejecutando PACK() e INDEX()
- * de manera sincronizada cuando Anderson y Jerson suministren sus motores.
+ * de manera sincronizada sobre el archivo activo y la Metadata.
  */
 public class QueueDispatcher implements Runnable {
 
@@ -107,10 +107,11 @@ public class QueueDispatcher implements Runnable {
                     // Coordinacion RF-07: Compactacion con Anderson
                     if (packEngine != null) {
                         long activeKept = packEngine.pack(storageEngine, 4);
-                        command.complete(ResponseResult.ok("PACK completado: " + activeKept + " registros activos retenidos", -1, activeKept));
+                        command.complete(ResponseResult.ok("PACK completado: " + activeKept
+                                + " registros activos retenidos", -1, activeKept));
                     } else {
-                        // Modo coordinado preliminar
-                        command.complete(ResponseResult.ok("Mantenimiento PACK coordinado (Pendiente modulo final de Anderson)", -1, null));
+                        command.complete(ResponseResult.error(
+                                "PACK no configurado en el servidor"));
                     }
                 }
                 case MAINTENANCE_INDEX -> {

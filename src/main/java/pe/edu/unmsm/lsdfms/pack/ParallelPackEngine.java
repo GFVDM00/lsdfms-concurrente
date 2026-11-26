@@ -1,15 +1,11 @@
 package pe.edu.unmsm.lsdfms.pack;
 
 import java.io.IOException;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
-import java.nio.ByteBuffer;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -54,24 +50,10 @@ public final class ParallelPackEngine {
         List<Future<PartitionWorker.Statistics>> futures = new ArrayList<>();
         boolean interruptionObserved = false;
         try {
-            // FileLock coordinates only with writers that acquire the same lock; it is advisory.
-            try (FileChannel channel = FileChannel.open(input, StandardOpenOption.READ, StandardOpenOption.WRITE);
-                 FileLock ignored = channel.lock();
-                 FileChannel snapshotChannel = FileChannel.open(snapshot, StandardOpenOption.CREATE,
-                         StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-                ByteBuffer buffer = ByteBuffer.allocate(1024 * 1024);
-                long position = 0;
-                while (position < channel.size()) {
-                    buffer.clear();
-                    int count = channel.read(buffer, position);
-                    if (count < 0) throw new IOException("Source ended while taking PACK snapshot");
-                    if (count == 0) continue;
-                    buffer.flip();
-                    while (buffer.hasRemaining()) snapshotChannel.write(buffer);
-                    position += count;
-                }
-                snapshotChannel.force(true);
-            }
+            // El servidor invoca PACK desde el consumidor unico de la cola, por lo
+            // que las mutaciones ya estan serializadas. El snapshot se publica
+            // solo si su tamano coincide con el del origen.
+            Files.copy(input, snapshot, StandardCopyOption.REPLACE_EXISTING);
             if (Files.size(snapshot) != originalSize) throw new IOException("Source changed while taking PACK snapshot");
             List<DataPartition> partitions = DataPartitioner.partition(snapshot, threads);
             for (int i = 0; i < partitions.size(); i++) {

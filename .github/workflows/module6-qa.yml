@@ -30,6 +30,18 @@ jobs:
             -sourcepath src/main/java:src/test/java @sources.txt
           rm -f sources.txt
 
+      - name: Storage regression
+        run: java -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.storage.RafStorageEngineRegressionTest
+
+      - name: PACK paralelo
+        run: java -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.pack.ParallelPackEngineTest
+
+      - name: INDEX paralelo
+        run: java -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.index.ParallelIndexEngineTest
+
+      - name: Cola concurrente
+        run: java -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.queue.QueueConcurrencyTest
+
       - name: Generador masivo
         run: java -ea -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGeneratorTest
 
@@ -38,3 +50,9 @@ jobs:
 
       - name: Integridad y QA
         run: java -ea -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.qa.IntegrityCheckerTest
+
+      - name: PACK integrado con storage
+        run: java -ea -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.pack.PackEngineAdapterTest
+
+      - name: Servidor end-to-end
+        run: java -ea -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.server.ServerIntegrationTest

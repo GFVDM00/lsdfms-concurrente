@@ -1,8 +1,9 @@
 # Resultados de Benchmarking — Módulo 6
 
-> **Estado:** resultados locales del 26/11/2026. Sirven como evidencia de la
-> metodología y del comportamiento actual del motor. No sustituyen una campaña
-> de medición en la VM de nube ni una revisión de PACK.
+> **Estado:** resultados locales del 26/11/2026, después de integrar PACK con
+> el archivo activo y habilitar `threads=1` en INDEX. Sirven como evidencia de
+> la metodología y del comportamiento actual del motor. Deben repetirse en la
+> VM de nube para RNF-04.
 
 ## 1. Entorno de medición
 
@@ -13,7 +14,7 @@
 | Sistema operativo | Windows 11 Home, 10.0.26200 |
 | JDK | OpenJDK 21.0.6 LTS |
 | Disco de trabajo | Directorio temporal local (`%TEMP%`), fuera de OneDrive |
-| Dataset | Generado por `MassiveDataGenerator` con seed 42 y 10% de eliminados |
+| Dataset | `MassiveDataGenerator`, seed 42, 10% de eliminados |
 
 ## 2. Datasets
 
@@ -23,27 +24,24 @@
 | 500k | 500,000 | 449,722 | 50,278 | 52.5 MB |
 | 2M | 2,000,000 | 1,799,070 | 200,930 | 210.0 MB |
 
-Comando de generación:
-
 ```powershell
 java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator `
   --records 2000000 `
   --output data/dataset_2m.dat `
   --metadata data/dataset_2m.properties `
-  --seed 42 `
-  --deleted-percent 10
+  --seed 42 --deleted-percent 10
 ```
 
 ## 3. Metodología
 
 - **T1 PACK:** `SequentialPackEngine` (copia secuencial de registros activos).
 - **T2/T4/T8 PACK:** `ParallelPackEngine` de producción.
-- **T1 INDEX:** una columna a la vez con `ParallelIndexEngine` (`threads=0` y una
-  sola columna), sumando los cuatro tiempos.
-- **T2/T4/T8 INDEX:** `ParallelIndexEngine` con todas las columnas.
+- **T1 INDEX:** `ParallelIndexEngine` con `threads=1` (todas las columnas en un
+  solo hilo).
+- **T2/T4/T8 INDEX:** `ParallelIndexEngine` con el número de hilos indicado.
 - **100k:** 1 warmup + 3 repeticiones, mediana.
-- **500k y 2M:** 1 repetición sin warmup por tiempo de ejecución; los valores son
-  indicativos y tienen mayor varianza.
+- **500k y 2M:** 1 repetición sin warmup por tiempo de ejecución; los valores
+  son indicativos y tienen mayor varianza.
 - Cada corrida usa una copia limpia del dataset en un directorio temporal.
 - Speedup = `T1 / Tp`; eficiencia = `Speedup / p`.
 
@@ -53,19 +51,19 @@ java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator `
 
 | Hilos | Tiempo (ms) | Speedup | Eficiencia |
 |---:|---:|---:|---:|
-| 1 | 919.94 | 1.000 | 1.000 |
-| 2 | 6,224.00 | 0.148 | 0.074 |
-| 4 | 4,293.21 | 0.214 | 0.054 |
-| 8 | 3,766.93 | 0.244 | 0.031 |
+| 1 | 1,667.76 | 1.000 | 1.000 |
+| 2 | 2,287.37 | 0.729 | 0.365 |
+| 4 | 2,128.65 | 0.783 | 0.196 |
+| 8 | 2,259.46 | 0.738 | 0.092 |
 
 ### INDEX
 
 | Hilos | Tiempo (ms) | Speedup | Eficiencia |
 |---:|---:|---:|---:|
-| 1 | 11,445.43 | 1.000 | 1.000 |
-| 2 | 8,721.63 | 1.312 | 0.656 |
-| 4 | 9,110.17 | 1.256 | 0.314 |
-| 8 | 4,684.07 | 2.444 | 0.305 |
+| 1 | 18,988.98 | 1.000 | 1.000 |
+| 2 | 15,061.90 | 1.261 | 0.630 |
+| 4 | 6,649.34 | 2.856 | 0.714 |
+| 8 | 6,619.92 | 2.868 | 0.359 |
 
 ## 5. Resultados — 500k (1 repetición)
 
@@ -73,23 +71,19 @@ java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator `
 
 | Hilos | Tiempo (ms) | Speedup | Eficiencia |
 |---:|---:|---:|---:|
-| 1 | 2,838.53 | 1.000 | 1.000 |
-| 2 | 20,859.57 | 0.136 | 0.068 |
-| 4 | 149,411.07 | 0.019 | 0.005 |
-| 8 | 15,567.34 | 0.182 | 0.023 |
-
-> La corrida de 4 hilos fue un valor atípico. Una repetición posterior del mismo
-> caso midió **10,145.76 ms** (speedup 0.316). Aun así, PACK sigue siendo más
-> lento que la referencia secuencial.
+| 1 | 3,803.25 | 1.000 | 1.000 |
+| 2 | 4,594.05 | 0.828 | 0.414 |
+| 4 | 4,315.74 | 0.881 | 0.220 |
+| 8 | 3,978.44 | 0.956 | 0.119 |
 
 ### INDEX
 
 | Hilos | Tiempo (ms) | Speedup | Eficiencia |
 |---:|---:|---:|---:|
-| 1 | 28,421.79 | 1.000 | 1.000 |
-| 2 | 20,144.16 | 1.411 | 0.705 |
-| 4 | 15,162.14 | 1.875 | 0.469 |
-| 8 | 16,741.89 | 1.698 | 0.212 |
+| 1 | 34,748.26 | 1.000 | 1.000 |
+| 2 | 39,947.51 | 0.870 | 0.435 |
+| 4 | 28,978.71 | 1.199 | 0.300 |
+| 8 | 31,480.25 | 1.104 | 0.138 |
 
 ## 6. Resultados — 2M (1 repetición)
 
@@ -97,60 +91,57 @@ java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator `
 
 | Hilos | Tiempo (ms) | Speedup | Eficiencia |
 |---:|---:|---:|---:|
-| 1 | 12,273.47 | 1.000 | 1.000 |
-| 2 | 41,691.52 | 0.294 | 0.147 |
-| 4 | 40,904.10 | 0.300 | 0.075 |
-| 8 | 54,593.45 | 0.225 | 0.028 |
+| 1 | 37,829.35 | 1.000 | 1.000 |
+| 2 | 41,662.16 | 0.908 | 0.454 |
+| 4 | 54,320.48 | 0.696 | 0.174 |
+| 8 | 33,592.56 | 1.126 | 0.141 |
 
 ### INDEX
 
 | Hilos | Tiempo (ms) | Speedup | Eficiencia |
 |---:|---:|---:|---:|
-| 1 | 125,715.51 | 1.000 | 1.000 |
-| 2 | 248,701.74 | 0.506 | 0.253 |
-| 4 | 60,662.03 | 2.072 | 0.518 |
-| 8 | 85,351.24 | 1.473 | 0.184 |
+| 1 | 163,349.77 | 1.000 | 1.000 |
+| 2 | 89,764.02 | 1.820 | 0.910 |
+| 4 | 79,240.74 | 2.061 | 0.515 |
+| 8 | 70,764.25 | 2.308 | 0.289 |
 
 ## 7. Interpretación
 
 ### INDEX
 
-La paralelización por columnas sí muestra ganancia:
+La paralelización por columnas muestra ganancia real:
 
-- 100k: hasta **2.44×** con 8 hilos.
-- 500k: hasta **1.87×** con 4 hilos.
-- 2M: hasta **2.07×** con 4 hilos.
+- 100k: hasta **2.87×** con 4–8 hilos.
+- 500k: hasta **1.20×** con 4 hilos.
+- 2M: hasta **2.31×** con 8 hilos.
 
-La máquina tiene 4 núcleos físicos y el índice tiene 4 columnas. Con 8 hilos no
-hay más tareas independientes que ejecutar, por lo que la eficiencia cae. Los
-resultados de 2 hilos en 2M (0.506) son un valor atípico y deben repetirse con
-más warmup.
+La máquina tiene 4 núcleos físicos y el índice tiene 4 columnas. Los resultados
+de 500k son los más variables; deben repetirse con warmup y más repeticiones.
+Con 8 hilos no hay más tareas independientes que columnas, por lo que la
+eficiencia cae.
 
 ### PACK
 
-`ParallelPackEngine` **no muestra Speedup** en ninguna de las configuraciones
-medidas. La causa probable está en `PartitionWorker`: dentro del bucle de
-registros activos se ejecuta:
+PACK quedó **integrado**: el archivo compactado reemplaza al activo y la
+Metadata se reconstruye antes de INDEX. También se optimizó `PartitionWorker`
+para reutilizar un buffer y usar flujo secuencial en lugar de un `seek` por
+registro.
 
-```java
-byte[] buffer = new byte[64 * 1024];
-```
+Aun así, PACK no muestra una ganancia estable:
 
-Es decir, se asigna un buffer de 64 KB por cada registro activo (más de 1.7
-millones de buffers en el dataset de 2M), generando una presión de GC muy alta.
-Además, el motor copia el archivo completo a un snapshot antes de particionar y
-luego fusiona los bloques. La corrección corresponde a Anderson (módulo 3); este
-módulo no modifica su implementación.
+- 100k y 500k: el coste de snapshot, particionado, fusión y publicación domina
+  frente al trabajo útil.
+- 2M con 8 hilos: **1.13×**, la única configuración claramente por encima de T1.
+- Los resultados de 4 hilos en 2M y de 2 hilos en 500k son valores atípicos.
+
+Para una conclusión defendible se debe repetir la campaña con más warmup, en
+disco local sin antivirus/OneDrive y, preferentemente, en la VM de nube.
 
 ## 8. QA — 100k, 2 ciclos
-
-Comando:
 
 ```powershell
 java -cp bin pe.edu.unmsm.lsdfms.qa.StressTest --records 100000 --cycles 2 --seed 2026
 ```
-
-Resultados:
 
 | Etapa | Registros | Activos | Eliminados | Checks de índice | Errores |
 |---|---:|---:|---:|---:|---:|
@@ -164,44 +155,34 @@ Resultados:
 - La verificación de índice muestrea 10,000 ids y 2,000 valores por columna de
   texto indexada; los conteos y el recorrido del archivo son completos.
 
-## 9. Conclusiones para el equipo
+## 9. Integración verificada
 
-1. **INDEX** es el módulo paralelo que hoy demuestra ganancia real.
-2. **PACK** necesita una revisión de rendimiento de Anderson antes de presentar
-   una tabla de Speedup favorable. El problema no es el dataset ni la medición
-   del módulo 6.
-3. Los benchmarks de este módulo son **standalone**. Falta la integración de
-   PACK con el archivo activo/Metadata para medir el flujo completo del servidor.
-4. La VM de nube puede tener otro rendimiento; estos resultados son locales y
-   deben repetirse allí para RNF-04.
+Las siguientes pruebas pasan en local:
+
+- `PackEngineAdapterTest`: PACK reemplaza el archivo activo, reconstruye Metadata,
+  conserva activos y permite INDEX/búsqueda.
+- `ServerIntegrationTest`: POST, GET, PUT, DELETE, búsqueda por id, PACK + INDEX
+  y estado de sincronización por HTTP.
+- `IntegrityCheckerTest`: ciclo borrado/inserción/PACK/INDEX sin errores.
+- `MassiveDataGeneratorTest`, `BenchmarkSmokeTest`, pruebas de storage, PACK,
+  INDEX y cola.
 
 ## 10. Reproducción
 
 ```powershell
-# Compilar
 Get-ChildItem -Recurse -Filter *.java src/main/java |
   ForEach-Object { $_.FullName } | Set-Content sources-main.txt
 javac -encoding UTF-8 -d bin -sourcepath src/main/java @sources-main.txt
 
-# Generar
 java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator `
-  --records 100000 `
-  --output data/dataset_100k.dat `
-  --metadata data/dataset_100k.properties `
-  --seed 42 --deleted-percent 10
+  --records 100000 --output data/dataset_100k.dat `
+  --metadata data/dataset_100k.properties --seed 42 --deleted-percent 10
 
-# Verificar
-java -cp bin pe.edu.unmsm.lsdfms.generator.DatasetVerifier `
-  --data data/dataset_100k.dat --metadata data/dataset_100k.properties
-
-# Benchmark
 java -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkRunner `
-  --data data/dataset_100k.dat `
-  --metadata data/dataset_100k.properties `
-  --output results/benchmark_100k.csv `
-  --operations pack,index --threads 1,2,4,8 `
-  --repetitions 3 --warmup 1
+  --data data/dataset_100k.dat --metadata data/dataset_100k.properties `
+  --output results/benchmark_100k.csv --operations pack,index `
+  --threads 1,2,4,8 --repetitions 3 --warmup 1
 
-# QA
-java -cp bin pe.edu.unmsm.lsdfms.qa.StressTest --records 100000 --cycles 2 --seed 2026
+java -cp bin pe.edu.unmsm.lsdfms.qa.StressTest `
+  --records 100000 --cycles 2 --seed 2026
 ```
