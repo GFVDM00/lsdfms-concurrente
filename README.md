@@ -60,8 +60,9 @@ lsdfms-concurrente/
 │       │       ├── server/               # [Brandon] NativeHttpServer, Handlers REST
 │       │       ├── pack/                 # [Anderson] ParallelPackEngine, DataPartitioner, BlockMerger
 │       │       ├── index/                # [Jerson] ParallelIndexEngine, BinaryIndexSearcher, ColumnTask
-│       │       ├── generator/            # [Arancivia] MassiveDataGenerator
+│       │       ├── generator/            # [Arancivia] MassiveDataGenerator, DatasetVerifier
 │       │       ├── benchmark/            # [Arancivia] BenchmarkRunner, SpeedupMetrics
+│       │       ├── qa/                   # [Arancivia] IntegrityChecker, StressTest
 │       │       └── Main.java             # Punto de entrada / Bootstrapper
 │       └── resources/
 │           └── public/                   # [Cicilis] Interfaz Web (index.html, app.js, styles.css)
@@ -112,3 +113,44 @@ java -cp bin pe.edu.unmsm.lsdfms.storage.RafStorageEngineRegressionTest
 La metadata del motor se persiste en `data/metadata.properties`. Los archivos de
 índice (`.idx`) y su construcción pertenecen al módulo de indexación; el motor
 solo conserva en metadata el estado de sincronización y las columnas configuradas.
+
+---
+
+## 📊 Módulo 6: Generador, Benchmarking y QA
+
+El módulo de Arancivia se ejecuta por consola y no depende del cliente web:
+
+```bash
+# Generar un dataset de 100k con 10% de eliminados
+java -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGenerator \
+  --records 100000 \
+  --output data/dataset_100k.dat \
+  --metadata data/dataset_100k.properties \
+  --seed 42 --deleted-percent 10
+
+# Verificar el dataset
+java -cp bin pe.edu.unmsm.lsdfms.generator.DatasetVerifier \
+  --data data/dataset_100k.dat --metadata data/dataset_100k.properties
+
+# Benchmark PACK/INDEX con 1, 2, 4 y 8 hilos
+java -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkRunner \
+  --data data/dataset_100k.dat \
+  --metadata data/dataset_100k.properties \
+  --output results/benchmark_100k.csv \
+  --operations pack,index --threads 1,2,4,8 \
+  --repetitions 3 --warmup 1
+
+# Prueba de estrés e integridad
+java -cp bin pe.edu.unmsm.lsdfms.qa.StressTest \
+  --records 100000 --cycles 2 --seed 2026
+```
+
+Documentación detallada:
+
+- [`docs/GUIA_ARANCIVIA_GENERADOR_BENCHMARK_QA.md`](docs/GUIA_ARANCIVIA_GENERADOR_BENCHMARK_QA.md)
+- [`docs/RESULTADOS_BENCHMARK.md`](docs/RESULTADOS_BENCHMARK.md)
+
+> **Nota:** PACK todavía no está integrado con el servidor y, con el código
+> actual, su versión paralela no muestra ganancia frente a la secuencial. La
+> corrección de rendimiento corresponde al módulo 3; este módulo documenta el
+> hallazgo y mantiene sus benchmarks standalone.

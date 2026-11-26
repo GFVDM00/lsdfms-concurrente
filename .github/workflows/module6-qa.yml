@@ -1,0 +1,40 @@
+name: Module 6 - Generator, Benchmark & QA
+
+on:
+  push:
+    branches: [ main, feature/modulo-6-generator-qa ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  module6:
+    name: Generator, Benchmark & QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Compilar main y tests
+        run: |
+          mkdir -p bin data
+          find src/main/java src/test/java -name "*.java" > sources.txt
+          javac -encoding UTF-8 -d bin \
+            -sourcepath src/main/java:src/test/java @sources.txt
+          rm -f sources.txt
+
+      - name: Generador masivo
+        run: java -ea -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.generator.MassiveDataGeneratorTest
+
+      - name: Benchmark smoke
+        run: java -ea -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.benchmark.BenchmarkSmokeTest
+
+      - name: Integridad y QA
+        run: java -ea -Dfile.encoding=UTF-8 -cp bin pe.edu.unmsm.lsdfms.qa.IntegrityCheckerTest
