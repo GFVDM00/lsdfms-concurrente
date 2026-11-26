@@ -38,7 +38,8 @@ public interface StorageEngine extends AutoCloseable {
     long getFileSize() throws IOException;
 
     /**
-     * Retorna la metadata viva del motor.
+     * Retorna una vista coherente de la metadata. Las marcas de sincronización
+     * hechas sobre la vista se reflejan en el motor; saveMetadata() las persiste.
      */
     Metadata getMetadata();
 

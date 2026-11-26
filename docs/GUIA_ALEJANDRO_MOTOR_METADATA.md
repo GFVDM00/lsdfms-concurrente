@@ -11,6 +11,26 @@
 4. **Implementar el borrado lógico en $O(1)$** modificando exclusivamente el byte indicador (`0x00` = activo, `0x01` = eliminado) en la posición del offset sin reescribir el resto del archivo.
 5. **Gestionar la persistencia de `Metadata`** (contadores de registros totales, activos, eliminados y bandera `isIndexSynced`).
 
+La metadata se almacena en `data/metadata.properties` (formato `java.util.Properties`).
+`lastOffset` representa EOF, es decir, dónde comenzaría la próxima inserción. Al
+abrir datos existentes, el motor reconstruye offsets y contadores desde cabeceras
+válidas, incluso cuando no existe el archivo de metadata; no debe asumir que los
+offsets arbitrarios dentro del archivo son cabeceras.
+
+La reconstrucción solo conserva `isIndexSynced=true` si el `.properties` contiene
+todos los campos requeridos y sus contadores/`lastOffset` coinciden con el archivo.
+La ausencia o incompletitud de metadata, y cualquier discrepancia, se trata como
+índice desactualizado: el motor no puede verificar los archivos `.idx` que pertenecen
+al módulo de indexación. `getMetadata()` entrega una vista coherente para lecturas;
+`markIndexesSynchronized()` sobre esa vista actualiza la metadata viva, conservando
+el patrón del módulo 2, y `saveMetadata()` persiste el cambio.
+
+La escritura del `.properties` usa archivo temporal y reemplazo atómico cuando el
+sistema de archivos lo permite. Si persistir falla después de una inserción o
+borrado, el motor restaura datos y contadores en memoria y en el `.dat`. Los payloads
+menores a 26 bytes se rechazan: es el mínimo estructural del formato de `InsurancePolicy`
+(id, cinco longitudes de texto y prima), sin validar semánticamente cada campo al abrir.
+
 ---
 
 ## 📁 Archivos Preparados para Ti
