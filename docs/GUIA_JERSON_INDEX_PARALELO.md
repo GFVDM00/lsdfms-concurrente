@@ -46,7 +46,7 @@ Un archivo por columna, hermano del `.dat`: `policies_data_id.idx`, `policies_da
 - `rebuildAllIndexes(StorageEngine)` copia el `.dat` a un snapshot con buffer acotado y verifica que el tamaño no cambió durante la copia; los trabajadores leen solo ese snapshot. El `.dat` jamás se modifica.
 - CADA tarea escribe su propio temporal y `ParallelIndexEngine` publica cada `.idx` con `ATOMIC_MOVE` + reemplazo. Si el proveedor no soporta movimientos atómicos y el destino ya existe, la operación aborta conservando el índice anterior; solo se permite el fallback sin `REPLACE_EXISTING` cuando el destino no existe.
 - Si una tarea falla, se cancelan las restantes, se espera la terminación real del `ExecutorService` y se borra el workspace temporal. Con `InterruptedException` se restaura el estado de interrupción del hilo llamador.
-- `threads = 0` (constructor por defecto) usa un hilo por columna. También se pueden forzar `2`, `4` u `8` hilos para benchmarks; las tareas se distribuyen entre ellos sin compartir archivos.
+- `threads = 0` (constructor por defecto) usa un hilo por columna. También se pueden forzar `1`, `2`, `4` u `8` hilos para benchmarks; `threads=1` es la línea base secuencial y las tareas se distribuyen entre los hilos sin compartir archivos.
 - `rebuildAllIndexes` **no** marca `isIndexSynced`: `QueueDispatcher` lo hace tras una reconstrucción exitosa. Inserciones, borrados y PACK dejan el flag en `false`, por lo que el índice se considera desactualizado hasta el próximo `INDEX()`.
 
 ## Integración
@@ -77,7 +77,7 @@ java -ea -cp bin pe.edu.unmsm.lsdfms.index.ParallelIndexEngineTest
 
 ## Cobertura y límites conocidos
 
-La prueba cubre búsquedas por columna numérica y textual, registros eliminados, claves duplicadas, archivo vacío y todo eliminado, 2/4/8 hilos y hilo por columna, corrupción del `.dat`, corrupción del `.idx`, interrupción y limpieza, integridad del `.dat` y 100.000 registros en streaming.
+La prueba cubre búsquedas por columna numérica y textual, registros eliminados, claves duplicadas, archivo vacío y todo eliminado, 1/2/4/8 hilos y hilo por columna, corrupción del `.dat`, corrupción del `.idx`, interrupción y limpieza, integridad del `.dat` y 100.000 registros en streaming.
 
 - El snapshot es de solo lectura y no coordina con escritores que ignoran el protocolo de la cola; la integración robusta depende de que las mutaciones pasen por `ThreadSafeRequestQueue`, como ocurre en el servidor.
 - Tras un PACK, los offsets cambian: es obligatorio ejecutar `INDEX()` antes de fiarse de los índices (`Metadata.resetAfterCompaction` ya deja `indexSynced=false`).

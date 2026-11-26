@@ -1,8 +1,10 @@
 package pe.edu.unmsm.lsdfms.pack;
 
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -14,16 +16,17 @@ public final class DataPartitioner {
     public static List<DataPartition> partition(Path file, int requestedPartitions) throws IOException {
         if (requestedPartitions < 1) throw new IllegalArgumentException("Partition count must be positive");
         List<DataPartition> result = new ArrayList<>();
-        try (RandomAccessFile input = new RandomAccessFile(file.toFile(), "r")) {
-            long fileLength = input.length();
-            if (fileLength == 0) return result;
+        long fileLength = Files.size(file);
+        if (fileLength == 0) return result;
+
+        try (DataInputStream input = new DataInputStream(
+                new BufferedInputStream(Files.newInputStream(file), 1 << 20))) {
             long previousBoundary = 0;
             long previousCut = 0;
             long nextTargetPart = 1;
             long offset = 0;
             while (offset < fileLength) {
                 if (fileLength - offset < 5) throw new EOFException("Truncated record header at offset " + offset);
-                input.seek(offset);
                 int flag = input.readUnsignedByte();
                 if (flag != 0 && flag != 1) throw new IOException("Invalid deleted flag at offset " + offset);
                 int recordLength = input.readInt();
@@ -31,6 +34,7 @@ public final class DataPartitioner {
                     throw new IOException("Invalid record length at offset " + offset + ": " + recordLength);
                 }
                 long boundary = offset + 5L + recordLength;
+                input.skipNBytes(recordLength);
 
                 while (nextTargetPart < requestedPartitions) {
                     long target = (fileLength / requestedPartitions) * nextTargetPart

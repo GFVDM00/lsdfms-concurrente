@@ -21,9 +21,8 @@ import java.util.Locale;
  * Runner de benchmarks de PACK e INDEX.
  *
  * <p>Para T1 usa una implementacion secuencial de referencia. En INDEX, el
- * baseline ejecuta una columna a la vez con el mismo motor de produccion
- * ({@code ParallelIndexEngine} con un solo hilo), de modo que el trabajo total
- * sea equivalente al de la version paralela por columnas.</p>
+ * baseline ejecuta el mismo motor de produccion con {@code threads=1}; en PACK
+ * usa {@link SequentialPackEngine}.</p>
  *
  * <p>Los benchmarks se ejecutan sobre copias en un directorio temporal para no
  * contaminar el dataset fuente ni verse afectados por el directorio de trabajo.</p>
@@ -129,19 +128,13 @@ public final class BenchmarkRunner {
                     Path source = work.resolve("dataset.dat");
                     Files.copy(config.dataFile(), source, StandardCopyOption.REPLACE_EXISTING);
 
-                    double durationMs;
-                    if (threads == 1) {
-                        durationMs = runSequentialIndex(work, source, config.metadataFile(),
-                                columns, records, active, deleted);
-                    } else {
-                        BenchmarkStorage storage = new BenchmarkStorage(source,
-                                config.metadataFile(), columns);
-                        ParallelIndexEngine engine = new ParallelIndexEngine(work, threads);
-                        long started = System.nanoTime();
-                        engine.rebuildAllIndexes(storage);
-                        durationMs = (System.nanoTime() - started) / 1_000_000.0;
-                        validateIndex(engine.getLastResult(), records, active, deleted, threads);
-                    }
+                    BenchmarkStorage storage = new BenchmarkStorage(source,
+                            config.metadataFile(), columns);
+                    ParallelIndexEngine engine = new ParallelIndexEngine(work, threads);
+                    long started = System.nanoTime();
+                    engine.rebuildAllIndexes(storage);
+                    double durationMs = (System.nanoTime() - started) / 1_000_000.0;
+                    validateIndex(engine.getLastResult(), records, active, deleted, threads);
                     if (run >= config.warmup()) {
                         samples[run - config.warmup()] = durationMs;
                     }
@@ -153,25 +146,6 @@ public final class BenchmarkRunner {
                     median(samples)));
         }
         return results;
-    }
-
-    /**
-     * Baseline secuencial de INDEX: ejecuta una columna a la vez. Cada columna
-     * usa un pool de un solo hilo (threads=0 con una unica columna).
-     */
-    private static double runSequentialIndex(Path work, Path source, Path metadataFile,
-                                             List<String> columns, long records,
-                                             long active, long deleted) throws Exception {
-        double totalMs = 0.0;
-        for (String column : columns) {
-            BenchmarkStorage storage = new BenchmarkStorage(source, metadataFile, List.of(column));
-            ParallelIndexEngine engine = new ParallelIndexEngine(work, 0);
-            long started = System.nanoTime();
-            engine.rebuildAllIndexes(storage);
-            totalMs += (System.nanoTime() - started) / 1_000_000.0;
-            validateIndex(engine.getLastResult(), records, active, deleted, 1);
-        }
-        return totalMs;
     }
 
     private static void validateIndex(IndexResult result, long records, long active,

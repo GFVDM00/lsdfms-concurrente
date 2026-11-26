@@ -15,21 +15,26 @@ Eliminar físicamente los registros marcados `0x01`, conservar sin deserializar 
 
 ## Seguridad e integridad
 
-`pack(Path origen, int hilos)` escribe por defecto en `origen + ".packed"`. También se puede indicar explícitamente destino con `pack(origen, destino, hilos)`. Solo se permiten 2, 4 u 8 hilos. El archivo original jamás se reemplaza. El origen se copia a un snapshot de trabajo mientras se mantiene un bloqueo exclusivo de archivo (`FileLock`), y los trabajadores leen solo ese snapshot, así no se cruzan entre sí ni con escrituras cooperativas. Los archivos temporales se alojan en un directorio privado por ejecución y se limpian al terminar.
+`pack(Path origen, int hilos)` escribe por defecto en `origen + ".packed"`. También se puede indicar explícitamente destino con `pack(origen, destino, hilos)`. Solo se permiten 2, 4 u 8 hilos. El motor path-based nunca reemplaza el origen: la sustitución la hace `PackEngineAdapter` cuando se invoca desde el servidor.
 
-El bloqueo exclusivo de `FileChannel` es cooperativo: coordina únicamente con escritores que respeten el mismo mecanismo de bloqueo. No protege frente a escritores que lo ignoren. La integración robusta requiere coordinar PACK con la cola/bloqueo de mutaciones del sistema; no existe hoy esa API en `StorageEngine`.
+El origen se copia a un snapshot de trabajo y los trabajadores leen solo ese snapshot, así no se cruzan entre sí. En el servidor, PACK se ejecuta desde el consumidor único de `ThreadSafeRequestQueue`, por lo que las mutaciones ya están serializadas. Los archivos temporales se alojan en un directorio privado por ejecución y se limpian al terminar.
 
 Al terminar o fallar, el engine cancela tareas pendientes y espera la terminación real del `ExecutorService` antes de eliminar el workspace. Si recibe `InterruptedException`, hace cancelación y limpieza y restaura el estado de interrupción del hilo llamador. Ningún destino se publica antes de finalizar y validar la fusión; el origen nunca se reemplaza.
 
-La publicación intenta primero `ATOMIC_MOVE` con reemplazo. Si el proveedor indica que los movimientos atómicos no están soportados y el destino ya existe, PACK aborta y conserva ese destino. Solo cuando no existe se permite fallback a `Files.move` sin `REPLACE_EXISTING`, de modo que una creación concurrente del destino no se sobrescribe. El origen se abre actualmente con `READ` y `WRITE` porque el bloqueo exclusivo de `FileChannel` requiere un canal escribible; cambiarlo por un bloqueo compartido debilitaría la coordinación con escritores exclusivos y el contrato compartido no define otro protocolo. Por ello, un archivo con solo permisos de lectura puede no ser compactable con esta coordinación.
+La publicación intenta primero `ATOMIC_MOVE` con reemplazo. Si el proveedor indica que los movimientos atómicos no están soportados y el destino ya existe, PACK aborta y conserva ese destino. Solo cuando no existe se permite fallback a `Files.move` sin `REPLACE_EXISTING`, de modo que una creación concurrente del destino no se sobrescribe.
 
 Para pruebas, existen inyecciones package-private de checkpoint por registro y operación de movimiento. No amplían la API pública y permiten sincronizar la cancelación y simular `AtomicMoveNotSupportedException` sin depender del sistema de archivos local.
 
-## Metadata e integración pendiente
+## Metadata e integración
 
-`StorageEngine` solo expone operaciones CRUD y metadata; no expone pausa de escrituras ni sustitución/reapertura del archivo activo. `RafStorageEngine` y `MetadataRepository` en esta rama son esqueletos; la instancia del motor no ofrece un mecanismo para cambiar su `RandomAccessFile`. Por eso este módulo deliberadamente no modifica Metadata ni cambia el nombre del archivo activo. Tras integración coordinada, Alejandro debe detener mutaciones, ejecutar PACK, cambiar/reabrir el archivo activo y solo entonces invocar `Metadata.resetAfterCompaction(activos, últimoOffset, nombreNuevo)` y persistir metadata. Dicho método deja `indexSynced=false`, como corresponde: los índices deben reconstruirse.
+`PackEngineAdapter` implementa el contrato `PackEngine` del servidor:
 
-El destino debe estar en un directorio ya existente y ser distinto del origen. Si el proveedor no soporta `ATOMIC_MOVE`, un destino preexistente se conserva y la operación falla; solo se usa el fallback estándar cuando el destino todavía no existe y sin opción de reemplazo.
+1. obtiene el archivo activo mediante `MutableStorageEngine.activeDataFilePath()`;
+2. compacta a un temporal con `ParallelPackEngine`;
+3. publica el temporal con `MutableStorageEngine.replaceActiveDataFile(...)`;
+4. `RafStorageEngine` reabre el archivo, reconstruye offsets y contadores, actualiza `lastCompactedAt` y deja `isIndexSynced=false`.
+
+Después, `QueueDispatcher` ejecuta `INDEX()` y marca la Metadata como sincronizada. El destino debe estar en un directorio existente y ser distinto del origen. Si el proveedor no soporta `ATOMIC_MOVE`, un destino preexistente se conserva y la operación falla; solo se usa el fallback estándar cuando el destino todavía no existe.
 
 ## Ejecución
 
@@ -56,10 +61,12 @@ java -ea -cp bin pe.edu.unmsm.lsdfms.pack.ParallelPackEngineTest
 
 ## Cobertura y resultados
 
-La prueba ejecutable cubre archivo vacío, todos activos, todos eliminados, mezcla y longitudes variables (incluyendo payload vacío), 2/4/8 hilos, orden/contenido sin omisiones ni duplicados, cabecera truncada, bandera inválida, longitud negativa y longitud superior a los bytes restantes. También verifica destino preexistente con `ATOMIC_MOVE` no soportado, fallback sin destino, cancelación directa y end-to-end del engine con checkpoint determinista, terminación de workers, restauración del interrupt, error de fusión y limpieza de su archivo incompleto, conservación del origen/destino ante fallos y 100,000 registros generados y verificados en streaming. No se incluyen mediciones de rendimiento: no se han realizado benchmarks.
+La prueba ejecutable cubre archivo vacío, todos activos, todos eliminados, mezcla y longitudes variables (incluyendo payload vacío), 2/4/8 hilos, orden/contenido sin omisiones ni duplicados, cabecera truncada, bandera inválida, longitud negativa y longitud superior a los bytes restantes. También verifica destino preexistente con `ATOMIC_MOVE` no soportado, fallback sin destino, cancelación directa y end-to-end del engine con checkpoint determinista, terminación de workers, restauración del interrupt, error de fusión y limpieza de su archivo incompleto, conservación del origen/destino ante fallos y 100,000 registros generados y verificados en streaming.
+
+`PackEngineAdapterTest` verifica además la publicación sobre el archivo activo, la reconstrucción de Metadata y la búsqueda posterior a PACK + INDEX. Los benchmarks están en `docs/RESULTADOS_BENCHMARK.md`; PACK todavía no muestra una ganancia estable frente a la versión secuencial.
 
 ## Límites conocidos
 
-- La sincronización con mutaciones del motor/cola y el cambio transaccional de Metadata/archivo activo requieren un contrato de integración de Alejandro; no se inventaron métodos ni se modificó `StorageEngine`.
-- `FileLock` coordina únicamente escritores que usan el mismo bloqueo; no evita mutaciones de escritores no cooperativos.
+- PACK se coordina con las mutaciones a través de la cola del servidor. Una llamada standalone a `ParallelPackEngine` no debe ejecutarse en paralelo con escritores externos.
 - La recuperación ante caída abrupta del proceso puede dejar el directorio temporal; la limpieza garantizada aplica a salida normal y excepciones capturables.
+- El rendimiento de PACK está dominado por snapshot, particionado y fusión; hacen falta más mediciones en la VM de nube.

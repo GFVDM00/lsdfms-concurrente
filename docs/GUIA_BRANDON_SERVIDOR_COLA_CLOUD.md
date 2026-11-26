@@ -43,11 +43,14 @@ Cliente Web (Cicilis) / Peticiones HTTP Concurrentes
 | Método | Endpoint | Descripción | Comportamiento |
 |---|---|---|---|
 | `POST` | `/api/policies` | Inserción de una nueva póliza | Encola en `ThreadSafeRequestQueue`. Retorna HTTP 201 con el offset asignado. |
+| `PUT` | `/api/policies?offset={offset}` | Actualización de una póliza | Encola un UPDATE (borrado lógico + inserción). Retorna el nuevo offset. |
 | `DELETE` | `/api/policies?offset={offset}` | Borrado lógico de un registro | Encola la petición. Retorna HTTP 200 si se marcó `0x01`. |
 | `GET` | `/api/policies?offset={offset}` | Lectura directa por offset | Operación de solo lectura concurrente directa sobre el storage (no bloquea la cola). |
+| `GET` | `/api/search?column={col}&key={valor}` | Búsqueda por índice | Usa el índice de la columna; `id` se interpreta como numérico. |
+| `POST` | `/api/maintenance` | PACK + INDEX coordinados | Compacta el archivo activo y reconstruye los índices. |
 | `GET` | `/api/status` | Estado del sistema | Retorna JSON con contadores de metadata y tamaño actual de la cola. |
 | `GET` | `/api/health` | Healthcheck | Para load balancers y monitoreo en la nube (HTTP 200 `{"status":"UP"}`). |
-| `GET` | `/{archivo}` | Archivos estáticos | Sirve `index.html`, `app.js` y `styles.css` del cliente web. |
+| `GET` | `/{archivo}` | Archivos estáticos | Sirve `index.html`, `app.js` y `styles.css` del cliente web (Cicilis). |
 
 ### Ejemplo de JSON para `POST /api/policies`:
 ```json
@@ -78,7 +81,7 @@ Cliente Web (Cicilis) / Peticiones HTTP Concurrentes
    # Clonar el repositorio
    git clone https://github.com/GFVDM00/lsdfms-concurrente.git
    cd lsdfms-concurrente
-   git checkout feature/modulo-2-server-queue
+   git checkout main
 
    # Compilar
    mkdir -p bin
