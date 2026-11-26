@@ -1,5 +1,7 @@
 package pe.edu.unmsm.lsdfms.server;
 
+import pe.edu.unmsm.lsdfms.index.IndexEngine;
+import pe.edu.unmsm.lsdfms.index.ParallelIndexEngine;
 import pe.edu.unmsm.lsdfms.model.InsurancePolicy;
 import pe.edu.unmsm.lsdfms.storage.Metadata;
 import pe.edu.unmsm.lsdfms.storage.RafStorageEngine;
@@ -34,6 +36,8 @@ public class ServerApp {
 
         try {
             NativeHttpServer server = new NativeHttpServer(port, engine, 500);
+            IndexEngine indexEngine = new ParallelIndexEngine(new File("data").toPath());
+            server.setIndexEngine(indexEngine);
             server.start();
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -46,6 +50,7 @@ public class ServerApp {
             System.out.println("  POST   /api/policies        -> Encolar insercion de registro");
             System.out.println("  DELETE /api/policies?offset -> Encolar borrado logico");
             System.out.println("  GET    /api/policies?offset -> Lectura directa por offset");
+            System.out.println("  GET    /api/search?column=&key= -> Busqueda O(log n) por indice");
             System.out.println("  GET    /api/status          -> Estado de metadata y cola");
             System.out.println("  GET    /api/health          -> Verificacion de salud (Cloud)");
             System.out.println("Presione Ctrl+C para detener.");
