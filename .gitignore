@@ -1,0 +1,37 @@
+# Compiled class file
+*.class
+
+# Log file
+*.log
+
+# Package Files #
+*.jar
+*.war
+*.zip
+*.tar.gz
+
+# IDE - IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+out/
+
+# IDE - Eclipse
+.project
+.classpath
+.settings/
+
+# IDE - VS Code
+.vscode/
+
+# Build directories
+target/
+bin/
+build/
+
+# LSDFMS Data Files (No commitear datasets masivos)
+data/*.dat
+data/*.idx
+data/*.tmp
+data/partitions/
+data/temp/
